@@ -1,12 +1,11 @@
 // Shared posts API client, used by admin.html, writing.html, and post.html.
-// GETs read the static build (/data/posts.json, served by GitHub Pages);
-// writes go through the local-only /api server (server.js, run via `npm run dev`).
-const POSTS_DATA = 'data/posts.json';
-const POSTS_API  = '/api/posts';
+// Reads and writes both go through /api/posts, which the Worker serves from KV
+// so a post published from the admin page is live without a redeploy.
+const POSTS_API = '/api/posts';
 
 async function getPosts() {
     try {
-        const res = await fetch(POSTS_DATA);
+        const res = await fetch(POSTS_API);
         const posts = await res.json();
         return posts.sort((a, b) => new Date(b.date) - new Date(a.date));
     } catch {

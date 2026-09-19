@@ -11,8 +11,10 @@ logs/
 *.log
 npm-debug.log*
 
-# Vercel
-.vercel
+# Cloudflare
+.wrangler/
+.dev.vars
+_site/
 
 # OS files
 .DS_Store

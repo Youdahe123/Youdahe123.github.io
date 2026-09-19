@@ -1,0 +1,44 @@
+name = "youdahe-com"
+main = "worker/index.js"
+compatibility_date = "2026-09-19"
+
+# The static site is staged into _site by `npm run build`, exactly the set of
+# files GitHub Pages used to publish, plus the admin pages the Worker gates.
+[assets]
+directory = "./_site"
+binding = "ASSETS"
+
+# Everything else is served straight from the edge without waking the Worker.
+# These paths must hit Worker code first: the API, the R2-backed uploads, and
+# the private pages, which are gated server-side rather than in JavaScript.
+run_worker_first = [
+  "/api/*",
+  "/images/uploads/*",
+  "/admin",
+  "/admin.html",
+  "/admin-portal",
+  "/admin-portal.html",
+  "/daily",
+  "/daily.html",
+  "/notion-prep",
+  "/notion-prep.html",
+]
+
+# Site content: posts, daily logs, notes, photos, status.
+[[kv_namespaces]]
+binding = "DATA"
+id = "REPLACE_WITH_DATA_NAMESPACE_ID"
+
+# Admin sessions and login rate-limit counters. Separate namespace so its
+# short-TTL churn never sits next to durable content.
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "REPLACE_WITH_SESSIONS_NAMESPACE_ID"
+
+# Image uploads from the post editor.
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "youdahe-uploads"
+
+[observability]
+enabled = true

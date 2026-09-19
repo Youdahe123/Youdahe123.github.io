@@ -226,7 +226,7 @@
     <script src="script.js"></script>
     <script src="posts.js"></script>
     <script>
-        fetch('data/status.json').then(r => r.json()).then(d => {
+        fetch('/api/status').then(r => r.json()).then(d => {
             const el = document.getElementById('statusText');
             if (el && d.text) el.textContent = d.text;
         }).catch(() => {

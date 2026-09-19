@@ -121,9 +121,10 @@
     <script src="posts.js"></script>
     <script src="daily.js"></script>
     <script>
-        // This page (and everything it calls under /api/*) only runs locally
-        // via `npm run dev`; it is never part of the GitHub Pages deploy.
-        // Git push access is the auth boundary, so there's no password gate.
+        // The Worker refuses to serve this page without a valid admin session
+        // and redirects to /admin-portal.html, so reaching this script means
+        // you are signed in. Every /api/* write re-checks the session on the
+        // server, so the gate does not depend on anything happening here.
         let activeTab = 'post';
 
         document.getElementById('admin').style.display = 'block';

@@ -1,31 +1,31 @@
 {
   "name": "youdahe.com",
   "version": "1.0.0",
-  "description": "Personal portfolio website with AI chatbot",
-  "main": "server.js",
+  "description": "Personal portfolio website, deployed on Cloudflare Workers",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "build": "./scripts/build.sh",
+    "dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "seed": "./scripts/seed-kv.sh",
+    "seed:local": "./scripts/seed-kv.sh --local",
+    "tail": "wrangler tail"
   },
+  "keywords": [
+    "portfolio",
+    "cloudflare-workers"
+  ],
+  "author": "Youdahe Asfaw",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Youdahe123/youdahe.com.git"
   },
-  "keywords": [
-    "portfolio",
-    "chatbot",
-    "ai"
-  ],
-  "author": "Youdahe Asfaw",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/Youdahe123/youdahe.com/issues"
+  "devDependencies": {
+    "wrangler": "^4.135.0"
   },
-  "homepage": "https://github.com/Youdahe123/youdahe.com#readme",
-  "dependencies": {
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
-    "express": "^4.21.2"
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260918.1": true
   }
 }
