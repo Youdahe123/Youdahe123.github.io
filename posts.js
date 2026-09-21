@@ -2,14 +2,24 @@
 // Reads and writes both go through /api/posts, which the Worker serves from KV
 // so a post published from the admin page is live without a redeploy.
 const POSTS_API = '/api/posts';
+// GitHub Pages has no Worker, so /api/posts 404s there. The build ships the
+// same file as a static asset, which keeps the writing page readable.
+const POSTS_SEED = 'data/posts.json';
 
 async function getPosts() {
+    const posts = (await fetchJSON(POSTS_API)) || (await fetchJSON(POSTS_SEED)) || [];
+    return posts.sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
+// Returns null instead of throwing so getPosts can fall through to the seed.
+async function fetchJSON(url) {
     try {
-        const res = await fetch(POSTS_API);
-        const posts = await res.json();
-        return posts.sort((a, b) => new Date(b.date) - new Date(a.date));
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const data = await res.json();
+        return Array.isArray(data) ? data : null;
     } catch {
-        return [];
+        return null;
     }
 }
 
