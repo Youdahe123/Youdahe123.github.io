@@ -1,0 +1,53 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it: a half-published
+# site is worse than a slightly stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage the static site
+        run: ./scripts/build.sh
+
+      # Pages has no server, so the Worker's session gate does not exist here.
+      # Anything it used to protect would be public at a guessable URL, so the
+      # private pages are dropped from the artifact instead. build.sh still
+      # stages them for the Cloudflare build, which can gate them.
+      - name: Drop the pages the Worker would have gated
+        run: |
+          rm -f _site/admin.html _site/admin-portal.html \
+                _site/daily.html _site/notion-prep.html
+          echo "remaining html:"
+          ls _site/*.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
