@@ -46,3 +46,20 @@ function updateThemeIcon(theme) {
     }
 }
 
+
+// GitHub star count for youdaheDB. The Worker proxies and caches the GitHub
+// API, so this is one cheap call; if it fails the badge simply stays hidden.
+(function loadStars() {
+    const badge = document.getElementById('youdahedbStars');
+    if (!badge) return;
+
+    fetch('/api/stars')
+        .then(res => (res.ok ? res.json() : Promise.reject(res.status)))
+        .then(({ stars }) => {
+            if (typeof stars !== 'number') return;
+            badge.querySelector('.gh-stars-count').textContent = stars.toLocaleString();
+            badge.setAttribute('aria-label', `${stars} stars on GitHub`);
+            badge.hidden = false;
+        })
+        .catch(() => {});
+})();

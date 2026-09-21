@@ -5,6 +5,7 @@ import daily from './routes/daily.js';
 import notes from './routes/notes.js';
 import photos from './routes/photos.js';
 import posts from './routes/posts.js';
+import stars from './routes/stars.js';
 import status from './routes/status.js';
 import upload, { UPLOAD_PREFIX, serveUpload } from './routes/upload.js';
 
@@ -14,6 +15,7 @@ const ROUTES = {
   '/api/notes': notes,
   '/api/photos': photos,
   '/api/posts': posts,
+  '/api/stars': stars,
   '/api/status': status,
   '/api/upload': upload,
 };

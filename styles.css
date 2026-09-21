@@ -3849,3 +3849,30 @@ a.hl:hover {
         width: auto;
     }
 }
+
+/* GitHub star count on the youdaheDB card. Ships hidden and is only revealed
+   once the count arrives, so a failed or rate-limited fetch leaves the links
+   row looking exactly as it would without it. */
+.gh-stars {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 8px;
+    padding: 1px 6px;
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
+    border-radius: 999px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-color);
+    opacity: 0.65;
+    text-decoration: none;
+    vertical-align: 1px;
+}
+
+.gh-stars:hover {
+    opacity: 1;
+}
+
+.gh-stars[hidden] {
+    display: none;
+}
