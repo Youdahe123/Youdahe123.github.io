@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aim trainer · youdahe.com</title>
+    <link rel="icon" type="image/jpeg" href="thumbnails/757728ea03cf11b495d92a9852a9f060.jpg">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="aim-body">
+    <!-- The arena fills the window; every panel below sits on top of it. -->
+    <div class="aim-stage" id="aimStage">
+        <canvas id="aimCanvas"></canvas>
+
+        <!-- Dims the arena while the panel is up so the copy stays readable
+             over whatever the targets happen to be doing behind it. -->
+        <div class="aim-scrim" id="aimScrim" aria-hidden="true"></div>
+
+        <div class="aim-crosshair" id="aimCrosshair" aria-hidden="true" hidden>
+            <span></span><span></span><span></span><span></span>
+        </div>
+
+        <!-- Live readout while a run is going. -->
+        <div class="aim-hud" id="aimHud" aria-hidden="true" hidden>
+            <span class="aim-hud-cell"><b id="aimTime">30.0</b><i>time</i></span>
+            <span class="aim-hud-cell"><b id="aimScore">0</b><i>hits</i></span>
+            <span class="aim-hud-cell"><b id="aimAcc">100%</b><i>accuracy</i></span>
+        </div>
+
+        <!-- Start, pause and results all share one panel. -->
+        <div class="aim-panel" id="aimPanel">
+            <a class="aim-back" href="index.html">&larr; back</a>
+
+            <h1 class="aim-title nostyle">aim trainer</h1>
+
+            <div class="aim-stat">
+                <span class="aim-stat-label" id="aimStatLabel">high score</span>
+                <span class="aim-stat-value" id="aimStatValue">0</span>
+                <span class="aim-stat-note" id="aimStatNote">30 seconds &middot; no runs yet</span>
+            </div>
+
+            <div class="aim-actions">
+                <button class="aim-btn aim-btn-go" id="aimStart" type="button" disabled>loading…</button>
+                <button class="aim-btn" id="aimReset" type="button">reset score</button>
+            </div>
+
+            <p class="aim-hint" id="aimHint">click to fire &middot; move to aim &middot; f to inspect &middot; esc to pause</p>
+        </div>
+
+        <p class="aim-note" id="aimNote" hidden></p>
+    </div>
+
+    <script src="script.js"></script>
+    <script type="module" src="aim.js"></script>
+</body>
+</html>

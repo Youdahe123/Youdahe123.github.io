@@ -3,7 +3,7 @@ const themeToggle = document.getElementById('themeToggle');
 const html = document.documentElement;
 
 // Check for saved theme preference or default to light mode
-const currentTheme = localStorage.getItem('theme') || 'light';
+const currentTheme = localStorage.getItem('theme') || 'dark';
 html.setAttribute('data-theme', currentTheme);
 if (themeToggle) updateThemeIcon(currentTheme);
 

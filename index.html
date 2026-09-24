@@ -15,8 +15,7 @@
                     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
                 </svg>
             </button>
-            <img class="avatar" src="images/avatar.jpeg" alt="Youdahe Asfaw">
-            <h1 class="nostyle"><a class="name" href="index.html">Youdahe Asfaw</a></h1>
+            <h1 class="nostyle"><a class="name" href="index.html">Youdahe Asfaw</a></h1><a class="aim-link" href="aim.html" aria-label="Aim trainer" title="aim trainer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><circle cx="12" cy="12" r="3.2"></circle><path d="M12 1.5v3.2M12 19.3v3.2M1.5 12h3.2M19.3 12h3.2"></path></svg></a>
             <a class="extra" href="writing.html">Writing</a>
             <a class="extra" href="photography.html">Photography</a>
             <a class="extra" href="recruiter.html">For Recruiters</a>
@@ -25,17 +24,27 @@
         </div>
 
         <div class="prose">
+            <p class="intro">Hi! I'm a cs and statistics student at Minnesota State Mankato. At <a href="https://www.nmdp.org/" target="_blank" rel="noopener noreferrer">NMDP</a> I'm splitting a legacy .NET monolith into domain-bounded Java services over gRPC and Kafka at sub-second latency. Before that: a self-service app at <a href="https://www.libertymutual.com/" target="_blank" rel="noopener noreferrer">Liberty Mutual</a> that cut AIX decommissioning from three weeks to a day, a Java/Spring ingestion and hybrid retrieval pipeline over 50K+ docs at <a href="https://www.medica.com/" target="_blank" rel="noopener noreferrer">Medica</a>, and the ingestion layer under a 500K-entry platform at <a href="https://www.medtronic.com/" target="_blank" rel="noopener noreferrer">Medtronic</a>. My <a href="https://gustavus.edu/" target="_blank" rel="noopener noreferrer">research</a> at Gustavus was a voice-conditioned LayoutLMv3 form pipeline, 60 minutes to 15, shown at Macksey and PRISM. On my own: <a href="https://youdahedb.dev/" target="_blank" rel="noopener noreferrer">youdaheDB</a>, a distributed database engine in Rust, and <a href="pdf/docere_technical_report.pdf" target="_blank" rel="noopener noreferrer">docere</a>, an AI tutoring platform with $25K raised and 500+ students learning faster. Always up for a <a href="https://cal.com/youdahe-asfaw-np88fc/30min" target="_blank" rel="noopener noreferrer">chat</a>.</p>
+
             <p class="status"><span class="status-dot"></span><span id="statusText">loading...</span></p>
 
-            <blockquote>
-                I love talking about systems and startups, so <a href="https://cal.com/youdahe-asfaw-np88fc/30min" target="_blank" rel="noopener noreferrer">let's chat</a>. Student at Minnesota State University, Mankato, currently into distributed systems and MCPs.
-            </blockquote>
+            <!-- High five widget. The count comes from KV via /api/highfive and the
+                 row hides itself if that call fails. -->
+            <div class="hf" id="highFive">
+                <button class="hf-tap" id="highFiveButton" type="button" aria-pressed="false">
+                    <svg class="hf-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"></path>
+                        <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"></path>
+                        <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"></path>
+                        <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path>
+                    </svg>
+                    <span class="hf-line">high five</span>
+                    <span class="hf-count" id="highFiveNumber">0</span>
+                    <span class="hf-sr"> high fives</span>
+                </button>
 
-            <h1>About Me</h1>
-            <p>Hi, I'm Youdahe. I build things that work, mostly backend and infrastructure. I care more about whether something holds up once it's running than whether it looks clever.</p>
-            <p>I'm a CS and statistics student at Minnesota State University, Mankato, graduating June 2028. So far I've interned at Medtronic, Medica, Liberty Mutual, and NMDP, and spent a semester as a machine learning research assistant at Gustavus Adolphus College, working on document intelligence. These days I'm on the data platform team at NMDP and learning a lot from it. I'm always looking to do more research, so if you have something going, I'd like to hear about it.</p>
-            <p>On my own time I'm building youdaheDB, a distributed database engine in Rust. It's written up in <a href="https://news.algorythm.org/p/building-a-distributed-database-from" target="_blank" rel="noopener noreferrer">Algorythm</a>, the publication of a 20,000+ member community of Black software engineers.</p>
-            <p>If you're a recruiter or hiring manager, <a href="recruiter.html">there's a version of this page written for you</a>: what people I've worked with have said, how my skills map to real projects, and what I'm hoping to work on next.</p>
+                <span class="hf-sub" id="highFiveNote" aria-live="polite"></span>
+            </div>
 
             <h1>Latest News</h1>
             <ul class="news">
@@ -79,7 +88,6 @@
                 <h1>Experience</h1>
 
                 <div class="exp">
-                    <img class="exp-logo" src="logos/nmdp.png" alt="" aria-hidden="true">
                     <div class="exp-body">
                         <div class="exp-head">
                             <span class="exp-org">NMDP</span>
@@ -93,7 +101,6 @@
                 </div>
 
                 <div class="exp">
-                    <img class="exp-logo exp-logo--bleed" src="logos/libertymutual.svg" alt="" aria-hidden="true">
                     <div class="exp-body">
                         <div class="exp-head">
                             <span class="exp-org">Liberty Mutual</span>
@@ -108,7 +115,6 @@
                 </div>
 
                 <div class="exp">
-                    <img class="exp-logo" src="logos/medica.png" alt="" aria-hidden="true">
                     <div class="exp-body">
                         <div class="exp-head">
                             <span class="exp-org">Medica</span>
@@ -123,7 +129,6 @@
                 </div>
 
                 <div class="exp">
-                    <img class="exp-logo exp-logo--bleed" src="logos/gustavus.png" alt="" aria-hidden="true">
                     <div class="exp-body">
                         <div class="exp-head">
                             <span class="exp-org">Gustavus Adolphus College</span>
@@ -138,7 +143,6 @@
                 </div>
 
                 <div class="exp">
-                    <img class="exp-logo" src="logos/medtronic.png" alt="" aria-hidden="true">
                     <div class="exp-body">
                         <div class="exp-head">
                             <span class="exp-org">Medtronic</span>
@@ -158,24 +162,24 @@
 
                 <div class="item">
                     <h3>docere</h3>
-                    <div class="tags">Python &middot; TypeScript &middot; FastAPI &middot; PostgreSQL &middot; Redis &middot; Qdrant &middot; LangGraph</div>
+                    <div class="tags"><span class="tag">Python</span><span class="tag">TypeScript</span><span class="tag">FastAPI</span><span class="tag">PostgreSQL</span><span class="tag">Redis</span><span class="tag">Qdrant</span><span class="tag">LangGraph</span></div>
                     <p>AI tutoring platform that adapts to student knowledge gaps. Around 500 active users, a signed contract covering 20,000+ members, and $25K raised through grants and pitch competitions. Qdrant retrieval with adaptive strategy selection, an async pipeline on Redis/ARQ and LangGraph, and Canvas/Moodle integration over LTI 1.3.</p>
                     <p class="project-links">
                         <a href="pdf/docere_technical_report.pdf" target="_blank" class="project-link-text">report</a>
-                        &middot;
+                        
                         <button class="project-link-text" onclick="openDemo()">demo</button>
                     </p>
                 </div>
 
                 <div class="item">
                     <h3>youdaheDB</h3>
-                    <div class="tags">Rust &middot; LSM-tree &middot; Raft</div>
+                    <div class="tags"><span class="tag">Rust</span><span class="tag">LSM-tree</span><span class="tag">Raft</span></div>
                     <p>Distributed key-value storage engine written from scratch in Rust, standard library only: write-ahead log, MemTable, SSTable flush, and tombstone deletes on an LSM-tree, with Raft replication as the next phase. Written up in <em>Algorythm</em>, the publication of a 20k+ member community of Black software engineers.</p>
                     <p class="project-links">
                         <a href="pdf/project1_distributed_database.pdf" target="_blank" class="project-link-text">report</a>
-                        &middot;
+                        
                         <a href="https://news.algorythm.org/p/building-a-distributed-database-from" target="_blank" rel="noopener noreferrer" class="project-link-text">article</a>
-                        &middot;
+                        
                         <a href="https://github.com/Youdahe123/youdaheDB" target="_blank" rel="noopener noreferrer" class="project-link-text">source</a>
                         <a class="gh-stars" id="youdahedbStars" href="https://github.com/Youdahe123/youdaheDB/stargazers" target="_blank" rel="noopener noreferrer" hidden>
                             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -188,7 +192,7 @@
 
                 <div class="item">
                     <h3>event streaming platform</h3>
-                    <div class="tags">Go &middot; Linux &middot; Stream Processing</div>
+                    <div class="tags"><span class="tag">Go</span><span class="tag">Linux</span><span class="tag">Stream Processing</span></div>
                     <p>Kafka-style distributed commit log with partitioned, replicated storage and tiered migration from memory-mapped files to SSD to object storage. Exactly-once delivery via idempotent producers and transactional offset commits, plus event-time windowing and checkpoint/restore over a custom binary TCP protocol. Instrumented with Prometheus/Grafana for per-partition throughput, latency percentiles, and consumer lag.</p>
                     <p class="project-links">
                         <a href="pdf/project3_event_streaming.pdf" target="_blank" class="project-link-text">report</a>
@@ -197,7 +201,7 @@
 
                 <div class="item">
                     <h3>container runtime</h3>
-                    <div class="tags">Go &middot; Linux &middot; Networking</div>
+                    <div class="tags"><span class="tag">Go</span><span class="tag">Linux</span><span class="tag">Networking</span></div>
                     <p>Container runtime and orchestrator from scratch: namespaces, cgroups, overlay fs, scheduler, and service mesh.</p>
                     <p class="project-links">
                         <a href="pdf/project2_container_platform.pdf" target="_blank" class="project-link-text">report</a>
@@ -236,6 +240,8 @@
     </div>
 
     <script src="script.js"></script>
+    <script src="vendor/confetti.min.js"></script>
+    <script src="highfive.js"></script>
     <script src="posts.js"></script>
     <script>
         fetch('/api/status').then(r => r.json()).then(d => {
@@ -262,7 +268,7 @@
             list.innerHTML = posts.slice(0, 8).map(p => {
                 const d = new Date(p.date);
                 const dateStr = d.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
-                return `<li><span class="post-date-sm">${dateStr}</span> &raquo; <a href="post.html?id=${p.id}">${p.title}</a></li>`;
+                return `<li><span class="post-date-sm">${dateStr}</span> <a href="post.html?id=${p.id}">${p.title}</a></li>`;
             }).join('');
         }).catch(() => {
             document.getElementById('recentPosts').innerHTML = '<li>couldn\'t load posts</li>';

@@ -4,20 +4,51 @@
     box-sizing: border-box;
 }
 
+/* ---------- Ink tokens ----------
+
+   A dark, quiet page: near-black paper, warm off-white type, and two accents
+   used sparingly, a deep red for names and a muted gold for section labels.
+   Everything structural is a hairline; nothing has a fill unless it needs one.
+   Light mode is the same design with the values inverted, so the theme toggle
+   still does something sensible. */
 :root {
-    --bg-color: #ffffff;
-    --text-color: #000000;
-    --text-color-dark: #000000;
-    --nav-text-color: #000000;
-    --footer-bar-color: #000000;
+    --ink-bg: #121312;
+    --ink-fg: #f0e9dd;
+    --ink-muted: rgba(240, 233, 221, 0.62);
+    --ink-faint: rgba(240, 233, 221, 0.38);
+    --ink-rule: rgba(240, 233, 221, 0.14);
+    --ink-panel: rgba(240, 233, 221, 0.035);
+    /* One colour. The accents are kept as names so the palette has somewhere
+       to come back to: give these a hue and the red name and gold section
+       labels return everywhere at once. */
+    --ink-blood: var(--ink-fg);
+    --ink-gold: var(--ink-faint);
+    --ink-font: 'Inter', -apple-system, system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --ink-measure: 672px;
 }
 
-[data-theme="dark"] {
-    --bg-color: #000000;
-    --text-color: #ffffff;
-    --text-color-dark: #ffffff;
-    --nav-text-color: #ffffff;
-    --footer-bar-color: #ffffff;
+/* The rest of the stylesheet was written against these five names. Pointing
+   them at the ink palette re-themes every old rule in one place instead of
+   rewriting hundreds of declarations. */
+:root,
+[data-theme="dark"],
+[data-theme="light"] {
+    --bg-color: var(--ink-bg);
+    --text-color: var(--ink-fg);
+    --text-color-dark: var(--ink-fg);
+    --nav-text-color: var(--ink-fg);
+    --footer-bar-color: var(--ink-rule);
+}
+
+[data-theme="light"] {
+    --ink-bg: #fbfaf8;
+    --ink-fg: #16171a;
+    --ink-muted: rgba(22, 23, 26, 0.68);
+    --ink-faint: rgba(22, 23, 26, 0.42);
+    --ink-rule: rgba(22, 23, 26, 0.14);
+    --ink-panel: rgba(22, 23, 26, 0.03);
+    --ink-blood: var(--ink-fg);
+    --ink-gold: var(--ink-faint);
 }
 
 body {
@@ -4119,5 +4150,1117 @@ body.lightbox-open {
 
     .photo-grid img.photo-open:hover {
         transform: none;
+    }
+}
+
+
+/* ================= Ink layer =================
+
+   The quiet pass over everything the older rules above set up: Inter, a narrow
+   measure, lowercase section labels prefixed with a slash, hairline rules
+   instead of boxes, and colour used only on names and labels. */
+
+@font-face {
+    font-family: 'Inter';
+    src: url('vendor/inter.woff2') format('woff2');
+    font-weight: 400 700;
+    font-style: normal;
+    font-display: swap;
+}
+
+body {
+    font-family: var(--ink-font);
+    font-size: 16px;
+    line-height: 1.75;
+    color: var(--ink-fg);
+    background: var(--ink-bg);
+    -webkit-font-smoothing: antialiased;
+}
+
+.container,
+.home-container {
+    max-width: calc(var(--ink-measure) + 6rem);
+    padding: 5rem 3rem 7rem;
+}
+
+/* The gallery is the exception: a 672px measure is right for prose and wrong
+   for a wall of photographs, so it keeps its own width. */
+.photography-container {
+    max-width: 1400px;
+    padding: 5rem 2rem 7rem;
+}
+
+/* One column, like the rest of the page. Two 320px columns inside the measure
+   left the experience entries wrapping every four words. */
+.work-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+}
+
+.home-container .prose,
+.home-container .prose > p {
+    max-width: var(--ink-measure);
+}
+
+p,
+li {
+    color: var(--ink-muted);
+}
+
+/* The whole bio is this one paragraph, so it sits directly under the name and
+   gets the full measure. */
+.intro {
+    max-width: var(--ink-measure);
+    margin-bottom: 1.6rem;
+}
+
+/* The original stylesheet colours links per theme with selectors more specific
+   than a bare `a`, so every one of these needs the theme in front of it or the
+   whole site keeps its periwinkle links. */
+a,
+[data-theme="dark"] a,
+[data-theme="light"] a,
+a:visited,
+[data-theme="dark"] a:visited,
+[data-theme="light"] a:visited {
+    color: var(--ink-fg);
+    text-decoration: underline;
+    text-decoration-color: var(--ink-rule);
+    text-underline-offset: 3px;
+    transition: text-decoration-color 0.18s ease, color 0.18s ease;
+}
+
+a:hover,
+[data-theme="dark"] a:hover,
+[data-theme="light"] a:hover {
+    color: var(--ink-blood);
+    text-decoration-color: var(--ink-blood);
+}
+
+/* ---- headings: lowercase, slash-prefixed, gold ---- */
+
+h1:not(.nostyle),
+h2 {
+    font-family: var(--ink-font);
+    font-weight: 400;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+    text-transform: lowercase;
+    color: var(--ink-gold);
+    margin: 3.5rem 0 1.1rem;
+}
+
+h1:not(.nostyle)::before,
+h2::before {
+    content: "/ ";
+    position: static;
+    color: var(--ink-gold);
+}
+
+/* The recruiter page sets its own bigger, bolder h2 with a more specific
+   selector; section labels are one size everywhere. */
+.recruiter-section h2 {
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--ink-gold);
+}
+
+h3 {
+    font-family: var(--ink-font);
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--ink-fg);
+}
+
+/* ---- the title row ---- */
+
+/* The old row relied on inline flow plus a float for the toggle, which left
+   the links wrapping into a ragged second line under the avatar. As a flex
+   row they wrap as a group and the toggle stays pinned right. */
+.title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 0.7rem;
+    margin-bottom: 2.5rem;
+}
+
+/* Always last and always hard right, so it lands in the same place whether the
+   row has room for it or wraps to a second line. */
+.title .theme-toggle {
+    order: 99;
+    margin-left: auto;
+    float: none;
+}
+
+.title h1.nostyle {
+    display: inline;
+}
+
+.title .avatar {
+    margin-right: 0;
+}
+
+
+
+/* Beats the original stylesheet's own dark-mode rule, which paints this
+   salmon. */
+.title .name,
+[data-theme="dark"] .title .name,
+[data-theme="light"] .title .name {
+    color: var(--ink-blood);
+}
+
+.title .name {
+    font-family: var(--ink-font);
+    font-size: 1.95rem;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    text-transform: lowercase;
+    color: var(--ink-blood);
+    text-decoration: none;
+    text-shadow: none;
+}
+
+.title .name:hover {
+    color: var(--ink-blood);
+    opacity: 0.8;
+}
+
+.title .extra {
+    display: inline-block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-family: var(--ink-font);
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--ink-muted);
+    text-decoration: underline;
+    text-decoration-color: var(--ink-rule);
+    text-underline-offset: 3px;
+    white-space: nowrap;
+}
+
+.title .extra:hover {
+    background: none;
+    transform: none;
+    box-shadow: none;
+    color: var(--ink-blood);
+    text-decoration-color: var(--ink-blood);
+}
+
+.title .theme-toggle {
+    width: auto;
+    height: auto;
+    padding: 0.35rem;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    color: var(--ink-faint);
+}
+
+.title .theme-toggle:hover {
+    background: none;
+    transform: none;
+    color: var(--ink-fg);
+    opacity: 1;
+}
+
+/* The crosshair that opens the aim trainer, next to the name. */
+.aim-link {
+    display: inline-block;
+    margin-left: -0.35rem;
+    color: var(--ink-gold);
+    opacity: 0.6;
+    vertical-align: middle;
+    text-decoration: none;
+    transition: color 0.18s ease, opacity 0.18s ease, transform 0.18s ease;
+}
+
+.aim-link:hover {
+    color: var(--ink-blood);
+    opacity: 1;
+    transform: rotate(90deg);
+}
+
+/* ---- status line ---- */
+
+.status {
+    display: inline-flex;
+    gap: 0.5rem;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-family: var(--ink-font);
+    font-size: 14px;
+    color: var(--ink-muted);
+    opacity: 1;
+    margin-bottom: 1.5rem;
+}
+
+.status-dot,
+.status-line .status-dot {
+    width: 6px;
+    height: 6px;
+    border: 0;
+    border-radius: 50%;
+    background-color: var(--ink-blood);
+    align-self: center;
+}
+
+/* ---- blockquote ---- */
+
+blockquote {
+    position: static;
+    margin: 1.5rem 0 2rem;
+    padding: 0 0 0 1.1rem;
+    border: 0;
+    border-left: 1px solid var(--ink-rule);
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-size: 16px;
+    color: var(--ink-muted);
+    opacity: 1;
+}
+
+blockquote::before,
+blockquote::after {
+    content: none;
+}
+
+/* ---- lists: a hairline down the left, no boxes ---- */
+
+.news,
+.posts,
+.work-col .exp,
+.work-col .item {
+    border-left: 1px solid var(--ink-rule);
+    padding-left: 1.1rem;
+}
+
+.news li {
+    grid-template-columns: 5rem 1fr;
+    gap: 0.9rem;
+    font-size: 15px;
+    line-height: 1.7;
+    margin-bottom: 1rem;
+}
+
+/* ul.posts .post-date-sm in the original stylesheet is more specific than a
+   bare class, and it sets Courier. */
+.news .news-date,
+.exp-when,
+.post-date-sm,
+ul.posts .post-date-sm,
+.post-date {
+    display: inline;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    font-family: var(--ink-font);
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--ink-faint);
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+}
+
+.news .news-body {
+    color: var(--ink-muted);
+    opacity: 1;
+}
+
+/* The original pulled this row out of the list with a negative margin and a
+   yellow bar. Here it lines up with everything else and is marked by its date
+   instead. */
+.news-featured {
+    padding: 0;
+    margin-left: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+}
+
+.news-featured .news-date {
+    color: var(--ink-blood);
+}
+
+.news-featured::after {
+    content: none;
+}
+
+/* ---- experience and projects ---- */
+
+.exp,
+.item {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    transform: none;
+    margin: 0 0 1.4rem;
+}
+
+.exp:hover,
+.item:hover,
+.exp:nth-child(even),
+.exp:nth-child(odd),
+.item:nth-child(even),
+.item:nth-child(odd) {
+    transform: none;
+    box-shadow: none;
+}
+
+.exp {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+}
+
+/* The logo images are gone from the markup entirely; a display:none image is
+   still downloaded. */
+
+.exp-org,
+.item h3 {
+    font-family: var(--ink-font);
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--ink-fg);
+}
+
+.exp-role {
+    font-family: var(--ink-font);
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--ink-faint);
+}
+
+.exp .role-list li,
+.item p {
+    font-size: 15px;
+    color: var(--ink-muted);
+    opacity: 1;
+}
+
+.role-list li::before,
+ul.posts li::before {
+    content: "";
+}
+
+/* Without their markers these items need space between them, or a two-point
+   role reads as one run-on paragraph. */
+.role-list li,
+ul.posts li {
+    padding-left: 0;
+    margin-bottom: 0.5rem;
+}
+
+/* ---- tags and links ---- */
+
+/* Back to plain inline text: as flex items the spans swallowed the space in
+   front of each separator, printing "Rust· LSM-tree". */
+.item .tags {
+    display: block;
+    margin-bottom: 0.4rem;
+    font-size: 13px;
+    color: var(--ink-faint);
+}
+
+.item .tags .tag {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    font-family: var(--ink-font);
+    font-weight: 400;
+}
+
+/* The chips were separate boxes; as plain text they need a separator again. */
+.item .tags .tag + .tag::before {
+    content: " · ";
+    color: var(--ink-faint);
+}
+
+.project-link-text,
+.post-back {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-family: var(--ink-font);
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--ink-muted);
+    text-decoration: underline;
+    text-decoration-color: var(--ink-rule);
+    text-underline-offset: 3px;
+}
+
+.project-link-text:hover,
+.post-back:hover {
+    background: none;
+    transform: none;
+    box-shadow: none;
+    color: var(--ink-blood);
+    text-decoration-color: var(--ink-blood);
+}
+
+.item .project-links {
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+
+.gh-stars {
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: var(--ink-font);
+    font-size: 13px;
+    color: var(--ink-faint);
+}
+
+.gh-stars:hover {
+    color: var(--ink-blood);
+    transform: none;
+}
+
+/* ---- writing index and posts ---- */
+
+.post-list {
+    gap: 0;
+    border-left: 1px solid var(--ink-rule);
+    padding-left: 1.1rem;
+}
+
+/* The whole entry is one anchor, so the global link underline was running
+   under the date and the preview as well. Only the title should read as the
+   link. */
+a.post-item,
+[data-theme="dark"] a.post-item,
+[data-theme="light"] a.post-item {
+    text-decoration: none;
+}
+
+.post-item {
+    padding: 0 0 1.6rem;
+    border: 0;
+    border-top: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    transform: none;
+}
+
+.post-item:last-child,
+.post-item:nth-child(odd),
+.post-item:nth-child(even) {
+    border: 0;
+    transform: none;
+}
+
+.post-item:hover {
+    transform: none;
+    box-shadow: none;
+    opacity: 1;
+}
+
+.post-item:hover .post-heading {
+    color: var(--ink-fg);
+    text-decoration-color: var(--ink-fg);
+}
+
+/* Post titles are content, not section labels: no slash, no lowercasing. */
+.post-heading::before {
+    content: none;
+}
+
+.post-heading {
+    text-decoration: underline;
+    text-decoration-color: var(--ink-rule);
+    text-underline-offset: 3px;
+    text-transform: none;
+    font-family: var(--ink-font);
+    font-size: 17px;
+    font-weight: 500;
+    color: var(--ink-fg);
+    margin: 0.2rem 0 0.3rem;
+}
+
+.post-preview {
+    font-size: 15px;
+    color: var(--ink-muted);
+    opacity: 1;
+}
+
+/* h1:not(.nostyle) is more specific than a bare class, so the article title
+   needs the element in the selector or it renders as a section label. The
+   writing index keeps the label treatment, which suits a page of one word. */
+h1.post-full-title {
+    font-family: var(--ink-font);
+    font-size: 1.9rem;
+    font-weight: 600;
+    line-height: 1.25;
+    letter-spacing: -0.025em;
+    color: var(--ink-fg);
+    text-transform: none;
+    text-decoration: none;
+    margin: 0.6rem 0 2rem;
+}
+
+h1.post-full-title::before {
+    content: none;
+}
+
+.writing-subtitle {
+    font-family: var(--ink-font);
+    font-size: 15px;
+    color: var(--ink-muted);
+    opacity: 1;
+}
+
+.post-body {
+    font-size: 16px;
+    line-height: 1.85;
+    color: var(--ink-muted);
+}
+
+.post-body .post-h2 {
+    font-family: var(--ink-font);
+    font-size: 14px;
+    font-weight: 400;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+    color: var(--ink-gold);
+}
+
+.post-body .post-h2::before {
+    content: "/ ";
+    color: var(--ink-gold);
+}
+
+/* ---- photography ---- */
+
+.photo-grid img,
+.photo-grid video {
+    border: 1px solid var(--ink-rule);
+    border-radius: 2px;
+    box-shadow: none;
+    background: var(--ink-panel);
+    opacity: 0.86;
+    transform: none;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.photo-grid img:nth-child(odd),
+.photo-grid video:nth-child(odd),
+.photo-grid img:nth-child(even),
+.photo-grid video:nth-child(even) {
+    transform: none;
+}
+
+.photo-grid img.photo-open:hover,
+.photo-grid video:hover {
+    opacity: 1;
+    transform: translateY(-2px);
+    box-shadow: none;
+}
+
+.lightbox-card {
+    border: 1px solid var(--ink-rule);
+    border-radius: 4px;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+    background: var(--ink-bg);
+}
+
+.lightbox-title {
+    font-family: var(--ink-font);
+    font-weight: 500;
+}
+
+/* ---- recruiter page ---- */
+
+.exp-item,
+.faq-item {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-bottom: 1px solid var(--ink-rule);
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+}
+
+.exp-item:last-child,
+.faq-item:last-child {
+    border-bottom: 0;
+}
+
+.exp-item summary,
+.faq-item summary {
+    font-family: var(--ink-font);
+    font-size: 15px;
+    font-weight: 400;
+    color: var(--ink-fg);
+}
+
+.exp-item summary::after,
+.faq-item summary::after {
+    font-family: var(--ink-font);
+    font-size: 15px;
+    font-weight: 400;
+    color: var(--ink-faint);
+}
+
+.exp-item p,
+.faq-item p {
+    font-size: 14px;
+    color: var(--ink-muted);
+    opacity: 1;
+}
+
+/* The highlight swipes go: colour on this page is for names, not blocks. */
+.hl {
+    background-image: none;
+    padding: 0;
+    font-weight: 500;
+    color: var(--ink-fg);
+}
+
+[data-theme="light"] .hl,
+[data-theme="dark"] .hl {
+    background-image: none;
+}
+
+/* ---- footer ---- */
+
+.site-footer {
+    border-top: 1px solid var(--ink-rule);
+    margin-top: 4rem;
+    padding-top: 1.5rem;
+    font-family: var(--ink-font);
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--ink-faint);
+    opacity: 1;
+}
+
+.site-footer a {
+    color: var(--ink-muted);
+}
+
+.footer-bar {
+    display: none;
+}
+
+@media (max-width: 640px) {
+    .container,
+    .home-container {
+        padding: 3rem 1.5rem 4rem;
+    }
+
+    .title .name {
+        font-size: 1.7rem;
+    }
+
+    .title .extra {
+        margin: 0 1rem 0 0;
+        font-size: 13px;
+    }
+
+    .news li {
+        grid-template-columns: 1fr;
+        gap: 0.2rem;
+    }
+}
+
+/* ---- high five row ----
+
+   No photo any more: the whole thing is one small text button carrying its own
+   count, sitting on the same hairline as the lists. */
+
+/* Block level, sized to its contents: as an inline box it shared a line with
+   the status above it. */
+.hf {
+    display: flex;
+    width: fit-content;
+    align-items: baseline;
+    gap: 0.7rem;
+    margin: 0 0 2rem;
+    padding: 0 0 0 1.1rem;
+    margin-top: 1.2rem;
+    border-left: 1px solid var(--ink-rule);
+    font-family: var(--ink-font);
+}
+
+.hf[hidden] {
+    display: none;
+}
+
+.hf-tap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: var(--ink-font);
+    font-size: 15px;
+    color: var(--ink-fg);
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: var(--ink-rule);
+    text-underline-offset: 3px;
+    transition: text-decoration-color 0.18s ease, color 0.18s ease;
+}
+
+.hf-tap:hover,
+.hf-tap:focus-visible {
+    text-decoration-color: var(--ink-fg);
+    outline: none;
+}
+
+/* The one piece of motion left: a quick nod when the five lands. */
+.hf.is-slapped .hf-icon {
+    animation: hf-nod 0.45s ease;
+}
+
+@keyframes hf-nod {
+    0%, 100% { transform: rotate(0); }
+    35% { transform: rotate(-18deg) scale(1.1); }
+    70% { transform: rotate(10deg); }
+}
+
+.hf-icon {
+    width: 15px;
+    height: 15px;
+    flex: none;
+    color: var(--ink-faint);
+    transition: color 0.25s ease;
+}
+
+.hf.is-mine .hf-icon {
+    color: var(--ink-fg);
+}
+
+.hf-line {
+    white-space: nowrap;
+}
+
+.hf-count {
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-faint);
+}
+
+.hf.is-mine .hf-count {
+    color: var(--ink-fg);
+}
+
+.hf-sub {
+    font-size: 13px;
+    color: var(--ink-faint);
+}
+
+.hf-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .hf-tap,
+    .hf-icon {
+        transition: none;
+    }
+
+    .hf.is-slapped .hf-icon {
+        animation: none;
+    }
+}
+
+/* ---- aim trainer ----
+
+   The arena is the page here: a full-window canvas with the panel and the
+   readout floating over it, all in the same ink palette as everything else. */
+
+.aim-body {
+    overflow: hidden;
+    background: var(--ink-bg);
+}
+
+.aim-stage {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+}
+
+.aim-stage canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* Only hide the cursor once the pointer is genuinely locked. Without a lock
+   the player aims with the cursor, so hiding it would make the round
+   unplayable. */
+.aim-stage.is-locked {
+    cursor: none;
+}
+
+.aim-btn[disabled] {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.aim-btn[disabled]:hover {
+    border-color: var(--ink-rule);
+    background: none;
+    color: var(--ink-muted);
+}
+
+.aim-crosshair {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 22px;
+    height: 22px;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+.aim-crosshair span {
+    position: absolute;
+    background: var(--ink-fg);
+    opacity: 0.85;
+}
+
+/* Four ticks around a gap, so the centre stays readable against the target. */
+.aim-crosshair span:nth-child(1),
+.aim-crosshair span:nth-child(2) {
+    left: 50%;
+    width: 2px;
+    height: 7px;
+    margin-left: -1px;
+}
+
+.aim-crosshair span:nth-child(1) { top: 0; }
+.aim-crosshair span:nth-child(2) { bottom: 0; }
+
+.aim-crosshair span:nth-child(3),
+.aim-crosshair span:nth-child(4) {
+    top: 50%;
+    height: 2px;
+    width: 7px;
+    margin-top: -1px;
+}
+
+.aim-crosshair span:nth-child(3) { left: 0; }
+.aim-crosshair span:nth-child(4) { right: 0; }
+
+.aim-crosshair[hidden] {
+    display: none;
+}
+
+.aim-hud {
+    position: absolute;
+    top: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 2.5rem;
+    font-family: var(--ink-font);
+    pointer-events: none;
+}
+
+.aim-hud[hidden] {
+    display: none;
+}
+
+.aim-hud-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1.2;
+}
+
+.aim-hud-cell b {
+    font-size: 26px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-fg);
+}
+
+.aim-hud-cell i {
+    font-style: normal;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--ink-faint);
+}
+
+.aim-panel {
+    position: absolute;
+    top: 50%;
+    left: max(3rem, calc(50% - 30rem));
+    transform: translateY(-50%);
+    max-width: 24rem;
+    font-family: var(--ink-font);
+}
+
+.aim-panel[hidden] {
+    display: none;
+}
+
+.aim-back {
+    display: inline-block;
+    margin-bottom: 1.6rem;
+    font-size: 14px;
+    color: var(--ink-muted);
+    text-decoration: none;
+}
+
+.aim-back:hover {
+    color: var(--ink-blood);
+}
+
+.aim-scrim {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(100deg, var(--ink-bg) 0%, rgba(18, 19, 18, 0.93) 30%, rgba(18, 19, 18, 0.55) 70%, rgba(18, 19, 18, 0.35) 100%);
+    transition: opacity 0.35s ease;
+}
+
+/* Out of the way the moment a round starts. */
+.aim-stage.is-running .aim-scrim {
+    opacity: 0;
+}
+
+h1.aim-title {
+    display: block;
+    font-size: 2.1rem;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    text-transform: lowercase;
+    color: var(--ink-blood);
+    margin: 0 0 1.6rem;
+}
+
+.aim-title::before {
+    content: none;
+}
+
+.aim-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-bottom: 1.8rem;
+}
+
+.aim-stat-label {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-gold);
+}
+
+.aim-stat-value {
+    font-size: 3rem;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-fg);
+}
+
+.aim-stat-note {
+    font-size: 14px;
+    color: var(--ink-faint);
+}
+
+.aim-actions {
+    display: flex;
+    gap: 0.6rem;
+    margin-bottom: 1.5rem;
+}
+
+.aim-btn {
+    padding: 0.6rem 1.4rem;
+    border: 1px solid var(--ink-rule);
+    background: none;
+    font-family: var(--ink-font);
+    font-size: 15px;
+    color: var(--ink-muted);
+    cursor: pointer;
+    transition: border-color 0.18s ease, color 0.18s ease;
+}
+
+.aim-btn:hover {
+    border-color: var(--ink-fg);
+    color: var(--ink-fg);
+}
+
+.aim-btn-go {
+    border-color: var(--ink-blood);
+    color: var(--ink-fg);
+}
+
+.aim-btn-go:hover {
+    background: var(--ink-fg);
+    border-color: var(--ink-fg);
+    color: var(--ink-bg);
+}
+
+.aim-hint {
+    font-size: 13px;
+    color: var(--ink-faint);
+}
+
+/* Sits on the stage, not in the panel, so it survives the panel being hidden. */
+.aim-note {
+    position: absolute;
+    left: 50%;
+    bottom: 2.5rem;
+    transform: translateX(-50%);
+    padding-left: 0.9rem;
+    border-left: 1px solid var(--ink-blood);
+    font-family: var(--ink-font);
+    font-size: 13px;
+    color: var(--ink-muted);
+    background: rgba(18, 19, 18, 0.85);
+    pointer-events: none;
+}
+
+.aim-note[hidden] {
+    display: none;
+}
+
+@media (max-width: 720px) {
+    .aim-panel {
+        left: 1.5rem;
+        right: 1.5rem;
+        max-width: none;
+    }
+
+    .aim-hud {
+        top: 1.2rem;
+        gap: 1.6rem;
+    }
+
+    .aim-hud-cell b {
+        font-size: 21px;
     }
 }

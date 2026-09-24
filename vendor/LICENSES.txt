@@ -1,0 +1,14 @@
+Third-party assets, all self-hosted so the site makes no third-party requests.
+
+Inter - inter.woff2 (latin subset, variable weight 400-700)
+  SIL Open Font License 1.1
+  https://fonts.google.com/specimen/Inter
+
+three.js 0.180.0 - three/three.module.min.js, three/three.core.min.js
+  MIT License, Copyright 2010-2025 Three.js Authors
+  https://github.com/mrdoob/three.js
+  Used by the aim trainer on /aim.
+
+canvas-confetti 1.9.4 - confetti.min.js
+  ISC License, Copyright (c) 2020, Kiril Vatev
+  https://github.com/catdad/canvas-confetti

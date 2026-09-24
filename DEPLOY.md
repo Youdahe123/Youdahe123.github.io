@@ -75,6 +75,10 @@ npm run seed     # copies data/*.json into KV
 Run `npm run seed` once, at first deploy. After that KV is the source of truth
 and re-running it would overwrite live content with whatever is committed.
 
+The high five count is deliberately not in `data/`, so a re-seed can never
+reset it. `highfives.json` is created in the DATA namespace by the first
+person who taps the photo, and a namespace without it reads as zero.
+
 ### 7. Attach the domain
 
 In the dashboard: **Workers & Pages > youdahe-com > Settings > Domains &
@@ -103,6 +107,7 @@ public pages read from the same place.
 | Path | Anonymous |
 |---|---|
 | `GET /api/posts`, `/api/status`, `/api/photos` | allowed, the public site reads these |
+| `GET`/`POST /api/highfive` | allowed, the landing page widget writes the count |
 | `POST`/`DELETE` on any `/api/*` | 401 |
 | `/api/daily`, `/api/notes`, all methods | 401, these are private journals |
 | `/admin`, `/daily`, `/notion-prep` | redirected to `/admin-portal` |

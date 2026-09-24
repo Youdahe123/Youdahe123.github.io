@@ -2,6 +2,7 @@ import { json } from './lib/respond.js';
 import { isAuthenticated } from './lib/auth.js';
 import adminAuth from './routes/admin-auth.js';
 import daily from './routes/daily.js';
+import highfive from './routes/highfive.js';
 import notes from './routes/notes.js';
 import photos from './routes/photos.js';
 import posts from './routes/posts.js';
@@ -12,6 +13,7 @@ import upload, { UPLOAD_PREFIX, serveUpload } from './routes/upload.js';
 const ROUTES = {
   '/api/admin-auth': adminAuth,
   '/api/daily': daily,
+  '/api/highfive': highfive,
   '/api/notes': notes,
   '/api/photos': photos,
   '/api/posts': posts,
