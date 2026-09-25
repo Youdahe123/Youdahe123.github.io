@@ -18,6 +18,7 @@ const XH_COLOR_KEY = 'aim.crosshairColor';
 const SOUND_KEY = 'aim.sound';
 const SENS_KEY = 'aim.sensitivity';
 const RELOAD_KEY = 'aim.reload';
+const AK_MODE_KEY = 'aim.akMode';
 const MODE_KEY = 'aim.mode';
 const DIFFICULTY_KEY = 'aim.difficulty';
 const BOT_COUNT_KEY = 'aim.botCount';
@@ -2110,6 +2111,60 @@ function buildRifle() {
     return g;
 }
 
+// The AK-47: blued stamped receiver, wooden stock, grip and handguard, the gas
+// tube over the barrel, a slanted muzzle brake, and the long curved magazine.
+// The selector lever on the right turns between full auto and single shot.
+function buildAk() {
+    const g = new THREE.Group();
+    const blued = metal(0x2e3033, 0.45, 0.55);
+    const wood = metal(0x8a4b22, 0.55, 0.05);
+
+    box(g, blued, [0.095, 0.12, 0.62], [0, 0.02, -0.05]);
+    box(g, blued, [0.085, 0.03, 0.56], [0, 0.095, -0.03]);
+    box(g, blued, [0.06, 0.05, 0.1], [0, 0.1, -0.36]);
+    box(g, POLYMER, [0.004, 0.035, 0.12], [0.049, 0.04, -0.02]);
+    box(g, STEEL, [0.05, 0.02, 0.03], [0.07, 0.05, -0.2]);
+
+    const selector = new THREE.Group();
+    selector.position.set(0.051, 0.03, 0.1);
+    box(selector, STEEL, [0.012, 0.022, 0.17], [0.004, 0, -0.07]);
+    g.add(selector);
+    g.userData.selector = selector;
+
+    box(g, wood, [0.11, 0.1, 0.34], [0, -0.01, -0.54]);
+    box(g, wood, [0.08, 0.06, 0.3], [0, 0.085, -0.54]);
+    tube(g, blued, 0.022, 0.24, [0, 0.085, -0.82]);
+    box(g, blued, [0.05, 0.1, 0.05], [0, 0.05, -0.95]);
+    tube(g, blued, 0.02, 0.5, [0, 0.03, -0.98]);
+    box(g, blued, [0.03, 0.1, 0.04], [0, 0.1, -1.12]);
+    tube(g, blued, 0.03, 0.08, [0, 0.03, -1.26]);
+    box(g, blued, [0.062, 0.02, 0.06], [0, 0.058, -1.27], [0.4, 0, 0]);
+
+    // The magazine curves forward in three steps.
+    const mag = new THREE.Group();
+    const bakelite = metal(0x6e3a1f, 0.6, 0.15);
+    box(mag, bakelite, [0.07, 0.16, 0.14], [0, -0.12, -0.2], [-0.15, 0, 0]);
+    box(mag, bakelite, [0.07, 0.15, 0.14], [0, -0.26, -0.25], [-0.35, 0, 0]);
+    box(mag, bakelite, [0.07, 0.14, 0.14], [0, -0.38, -0.33], [-0.55, 0, 0]);
+    g.add(mag);
+    g.userData.mag = mag;
+
+    box(g, wood, [0.075, 0.22, 0.11], [0, -0.17, 0.12], [0.35, 0, 0]);
+    box(g, blued, [0.02, 0.012, 0.16], [0, -0.1, 0]);
+    box(g, STEEL, [0.014, 0.05, 0.016], [0, -0.08, 0.01]);
+    box(g, wood, [0.08, 0.12, 0.32], [0, -0.01, 0.4], [-0.08, 0, 0]);
+    box(g, wood, [0.085, 0.2, 0.2], [0, -0.05, 0.64], [-0.08, 0, 0]);
+    box(g, blued, [0.09, 0.21, 0.02], [0, -0.06, 0.75], [-0.08, 0, 0]);
+
+    const port = new THREE.Object3D();
+    port.position.set(0.055, 0.04, -0.02);
+    g.add(port);
+    g.userData.port = port;
+
+    attachMuzzle(g, [0, 0.03, -1.32], 0xffb456);
+    return g;
+}
+
 // A striker-fired polymer pistol: a boxy slide with rear serrations over a
 // short frame, three-dot sights and a steep grip.
 function buildPistol() {
@@ -2390,6 +2445,16 @@ const INSPECTS = {
             lift: hump(t, 0.7, 0.95) * 0.02,
         };
     },
+    // The AK: rolled over to look at the magazine, which is tugged and seated
+    // again, then a tap on the bottom of it.
+    magcheck: (t) => ({
+        pose: raise(t),
+        roll: hump(t, 0.1, 0.9) * 1.0,
+        yaw: hump(t, 0.1, 0.9) * 0.35,
+        pitch: -hump(t, 0.15, 0.85) * 0.15,
+        mag: hump(t, 0.35, 0.55) * 0.22,
+        back: hump(t, 0.64, 0.72) * 0.03,
+    }),
     // The pistol: turned out, flipped over round the barrel to show the other
     // side, and flipped back.
     flipside: (t) => ({
@@ -2506,6 +2571,10 @@ const WEAPONS = [
     { id: 'ar', label: 'ar', build: buildRifle, scale: 0.36, ...RIFLE_HOLD, showcase: 2.05,
         inspectStyle: 'sides', inspectMs: 3000, mag: 30, reloadStyle: 'mag', reloadMs: 2300,
         cooldown: 95, auto: true, kick: 3.2, punch: 0.0045, spread: { step: 0.005, max: 0.045 }, flash: 0.9, tracer: 0xffd88a, tracerWidth: 0.45 },
+    { id: 'ak', label: 'ak-47', build: buildAk, scale: 0.36, ...RIFLE_HOLD, showcase: 2.0,
+        inspectStyle: 'magcheck', inspectMs: 2800, mag: 30, reloadStyle: 'mag', reloadMs: 2400,
+        selectFire: true, cooldown: 100, auto: true, kick: 3.8, punch: 0.0055, spread: { step: 0.0065, max: 0.05 },
+        flash: 1.0, tracer: 0xffd08a, tracerWidth: 0.5 },
     { id: 'pistol', label: 'pistol', build: buildPistol, scale: 0.42, ...PISTOL_HOLD, showcase: 0.95,
         inspectStyle: 'flipside', inspectMs: 2400, mag: 20, reloadStyle: 'mag', reloadMs: 1600, pivot: new THREE.Vector3(0, 0.02, -0.18),
         slideTravel: 0.09, muzzleFlip: 0.16, grip: new THREE.Vector3(0, -0.2, 0.05),
@@ -2766,7 +2835,7 @@ function tickAmmo(now) {
 
 function updateAmmo() {
     const left = ammo[weapon.id] ?? weapon.mag;
-    elAmmoGun.textContent = weapon.label;
+    elAmmoGun.textContent = weapon.selectFire ? `${weapon.label} · ${akAuto ? 'auto' : 'semi'}` : weapon.label;
     elAmmoMag.textContent = reloadsOn ? String(left) : '∞';
     elAmmoReserve.hidden = !reloadsOn;
     elAmmo.classList.toggle('is-low', reloadsOn && left <= Math.ceil(weapon.mag * 0.2));
@@ -2889,6 +2958,10 @@ const SHOT_SOUNDS = {
     shotgun: () => {
         burst({ cutoff: 4500, decay: 0.42, volume: 0.85 });
         tone({ from: 90, to: 30, decay: 0.24, volume: 0.8 });
+    },
+    ak: () => {
+        burst({ cutoff: 5200, decay: 0.2, volume: 0.62 });
+        tone({ from: 120, to: 40, decay: 0.12, volume: 0.58 });
     },
     smg: () => {
         burst({ cutoff: 2200, decay: 0.07, volume: 0.3 });
@@ -3060,6 +3133,10 @@ function updateGun(now, dt) {
         // Swung out to the side for a reload.
         drum.position.x = ins.swing * 0.13;
     }
+
+    // The AK's selector lever: down a notch for single shot, all the way for auto.
+    const lever = gun.userData.selector;
+    if (lever) lever.rotation.x += ((akAuto ? -0.45 : -0.18) - lever.rotation.x) * Math.min(1, dt * 20);
 
     // The magazine drops down out of the gun and a new one comes back up.
     // Hidden at the bottom of the drop, which is where the swap happens.
@@ -3271,6 +3348,27 @@ function tappedGun(ndc) {
 }
 
 // A shot from the middle of the screen, which is where the crosshair is.
+// The AK switches between full auto and single shot on G. Every other gun is
+// fixed to what its table entry says.
+let akAuto = true;
+const isAuto = () => (weapon.selectFire ? akAuto : weapon.auto);
+let modeNoteTimer = 0;
+
+function toggleFireMode() {
+    if (!weapon.selectFire) return;
+    akAuto = !akAuto;
+    remember(AK_MODE_KEY, akAuto ? 'auto' : 'semi');
+    triggerHeld = false;
+    burst({ cutoff: 2600, type: 'bandpass', q: 5, decay: 0.05, volume: 0.3 });
+    updateAmmo();
+    updateHint();
+    if (running) {
+        setNote(akAuto ? 'full auto' : 'single shot');
+        clearTimeout(modeNoteTimer);
+        modeNoteTimer = setTimeout(() => setNote(''), 1200);
+    }
+}
+
 // A click this close to the gun being ready is held and fired the moment it
 // is, instead of being dropped and needing a second click.
 const BUFFER_MS = 220;
@@ -3282,7 +3380,7 @@ function fire(ndc) {
     const now = performance.now();
     const ready = Math.max(lastShotAt + weapon.cooldown, chamberStart ? chamberStart + BOLT_MS : 0);
     if (now < ready) {
-        if (!weapon.auto && !bufferedShot && ready - now <= BUFFER_MS) {
+        if (!isAuto() && !bufferedShot && ready - now <= BUFFER_MS) {
             bufferedShot = setTimeout(() => {
                 bufferedShot = 0;
                 fire(ndc);
@@ -3582,7 +3680,7 @@ function loop(now) {
     updateGun(now, dt);
 
     if (running) tickAmmo(now);
-    if (running && triggerHeld && weapon.auto) fire();
+    if (running && triggerHeld && isAuto()) fire();
 
     if (running) {
         const left = Math.max(0, endsAt - now);
@@ -3753,7 +3851,9 @@ function updateHint() {
     if (touchOnly) {
         elHint.textContent = `tap the ${targetKind.id === 'bullseye' ? 'targets' : `${targetKind.label}s`} · tap the gun to inspect it`;
     } else {
-        const fire = weapon.auto ? 'hold to spray' : weapon.scope ? 'click to fire · right click to scope' : 'click to fire';
+        const fire = weapon.selectFire
+            ? (akAuto ? 'hold to spray · g for single shot' : 'click to fire · g for full auto')
+            : isAuto() ? 'hold to spray' : weapon.scope ? 'click to fire · right click to scope' : 'click to fire';
         if (botsMode()) {
             elHint.textContent = `wasd to move · space to jump · shift to walk · ${fire}${reloadsOn ? ' · r to reload' : ''} · esc to pause`;
             return;
@@ -4058,6 +4158,7 @@ document.addEventListener('keydown', (event) => {
         inspectStart = performance.now();
     }
     if ((event.key === 'r' || event.key === 'R') && running && !event.repeat) startReload();
+    if (event.code === 'KeyG' && !event.repeat && !(event.target instanceof HTMLInputElement)) toggleFireMode();
 });
 
 // Switching tabs stops requestAnimationFrame, so a round left in the
@@ -4093,6 +4194,7 @@ buildChips(elCrosshairs, CROSSHAIRS, xhStyle, (id) => {
 buildSwatches();
 applyCrosshair();
 reloadsOn = recall(RELOAD_KEY) !== 'off';
+akAuto = recall(AK_MODE_KEY) !== 'semi';
 buildChips(elReloads, RELOAD_MODES, reloadsOn ? 'on' : 'off', (id) => {
     reloadsOn = id === 'on';
     remember(RELOAD_KEY, id);

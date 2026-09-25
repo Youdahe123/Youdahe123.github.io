@@ -22,7 +22,7 @@ export const BOT_COUNTS = [
 
 // Body damage per gun, roughly csgo's. Headshots are x4, legs x0.75, and the
 // short-range guns lose damage over distance.
-const DAMAGE = { plasma: 30, ar: 33, pistol: 30, deagle: 63, revolver: 86, awp: 115, shotgun: 26, smg: 26 };
+const DAMAGE = { plasma: 30, ar: 33, ak: 36, pistol: 30, deagle: 63, revolver: 86, awp: 115, shotgun: 26, smg: 26 };
 const FALLOFF = { shotgun: [12, 45], smg: [40, 130], pistol: [40, 150] };
 const MULTIPLIER = { head: 4, body: 1, legs: 0.75 };
 
