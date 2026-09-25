@@ -356,6 +356,11 @@ function buildRange(root, opts = {}) {
     outskirts(root, {
         seed: 11,
         gallery: { x: 56, z: 50, turn: -Math.PI / 2 },
+        rooms: [
+            { x: -56, z: 50, turn: Math.PI / 2, kind: 'cafe' },
+            { x: 56, z: -50, turn: -Math.PI / 2, kind: 'otaku' },
+        ],
+        life: { trees: true },
         galleryWall: () => face,
         inner: [-12, 12, -12, 12],
         outer: [-78, 78, -78, 78],
@@ -494,6 +499,9 @@ function outskirts(root, cfg) {
     // The gallery's plot, and the easter eggs still to hide.
     const spot = cfg.gallery;
     if (spot) keep.push([spot.x - 10, spot.x + 10, spot.z - 14, spot.z + 18]);
+    // The café and the den, each on its own plot.
+    const rooms = cfg.rooms ?? (spot ? ROOM_SPOTS : []);
+    for (const r of rooms) keep.push([r.x - 10, r.x + 10, r.z - 14, r.z + 14]);
     const eggQueue = cfg.eggs === false ? [] : [...EGGS];
     // Open corners of street cells an egg could sit in, gathered as the grid
     // is laid out and drawn from at random afterwards, so eggs spread out.
@@ -535,6 +543,10 @@ function outskirts(root, cfg) {
         placeEgg(root, egg, ex, ez);
     }
     eggQueue.push(...onRoof);
+
+    const roomWall = cfg.galleryWall || cfg.wall;
+    for (const r of rooms) (r.kind === 'cafe' ? animeCafe : otakuDen)(root, r, roomWall, rng);
+    if (cfg.life !== false) streetLife(root, eggSpots, rng, cfg.life || {});
 
     if (spot) {
         gallery(root, spot, cfg.galleryWall || cfg.wall);
@@ -983,6 +995,713 @@ function placeEgg(root, egg, x, z) {
     return g;
 }
 
+/* ----- personality: real buildings, furniture, and anime -----
+
+   The wide maps get lived in. Buildings get proper fronts (windows painted
+   into the wall texture so it stays one mesh a building, plus a door, an
+   awning, sometimes a poster, an air conditioner on the roof). Two buildings
+   on every map can be walked into: an anime café and an otaku den, both
+   furnished. The streets get café tables, benches, vending machines, cherry
+   trees, lanterns and statues. The anime here is all original: posters
+   painted from scratch, and four little creatures of my own in that style. */
+
+// Things that are only there to look at: skipped by collision and bullets.
+function deco(mesh) {
+    mesh.traverse((o) => {
+        o.userData.noCollide = true;
+    });
+    return mesh;
+}
+
+function mesh(parent, geometry, material, position, rotation) {
+    const m = new THREE.Mesh(geometry, material);
+    m.position.set(position[0], FLOOR_Y + position[1], position[2]);
+    if (rotation) m.rotation.set(rotation[0], rotation[1], rotation[2]);
+    parent.add(m);
+    return m;
+}
+
+/* ----- furniture ----- */
+
+const WOODS = [plain(0x6b4526), plain(0x8a5a33), plain(0x4a3020)];
+
+// A chair facing +Z in its own group, turned to face whatever it is at.
+function chair(parent, x, z, turn, material = WOODS[0], seat = null) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    g.rotation.y = turn;
+    block(g, seat || material, [1.3, 0.16, 1.3], [0, 1.45, 0]);
+    for (const [lx, lz] of [[-0.55, -0.55], [0.55, -0.55], [-0.55, 0.55], [0.55, 0.55]]) block(g, material, [0.12, 1.45, 0.12], [lx, 0, lz]);
+    block(g, material, [1.3, 1.7, 0.14], [0, 1.6, -0.6]);
+    parent.add(g);
+    return g;
+}
+
+function stool(parent, x, z, top = plain(0xb8341f)) {
+    mesh(parent, new THREE.CylinderGeometry(0.55, 0.55, 0.2, 16), top, [x, 2.3, z]);
+    mesh(parent, new THREE.CylinderGeometry(0.1, 0.14, 2.2, 8), plain(0x6f7477, { metalness: 0.5 }), [x, 1.1, z]);
+}
+
+function table(parent, x, z, r = 1.3, top = WOODS[1]) {
+    mesh(parent, new THREE.CylinderGeometry(r, r, 0.14, 24), top, [x, 2.4, z]);
+    mesh(parent, new THREE.CylinderGeometry(0.12, 0.3, 2.4, 10), plain(0x2f2a26), [x, 1.2, z]);
+}
+
+function bench(parent, x, z, turn) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    g.rotation.y = turn;
+    const wood = WOODS[1];
+    const iron = plain(0x2f3033, { metalness: 0.5 });
+    block(g, wood, [5, 0.2, 1.4], [0, 1.4, 0]);
+    block(g, wood, [5, 1.2, 0.18], [0, 1.9, -0.65]);
+    for (const lx of [-2.2, 2.2]) block(g, iron, [0.18, 1.4, 1.3], [lx, 0, 0]);
+    parent.add(g);
+}
+
+// A round table with chairs and, outside, a parasol.
+function cafeSet(parent, x, z, rng, parasol = true) {
+    table(parent, x, z);
+    const n = rng() < 0.5 ? 2 : 4;
+    for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + rng() * 0.3;
+        chair(parent, x + Math.sin(a) * 2.1, z + Math.cos(a) * 2.1, a + Math.PI);
+    }
+    if (parasol) {
+        const colors = [0xd94f3d, 0x3f6fb5, 0xe8c547, 0xf2efe6, 0x4f8a3a];
+        mesh(parent, new THREE.CylinderGeometry(0.08, 0.08, 6, 8), plain(0xd8d4cc), [x, 3, z]);
+        deco(mesh(parent, new THREE.ConeGeometry(3, 1.2, 8), plain(colors[Math.floor(rng() * colors.length)], { side: THREE.DoubleSide }), [x, 6.2, z]));
+    }
+}
+
+/* ----- the creatures: original, chibi, big-eyed ----- */
+
+function eyes(parent, y, z, spread, r) {
+    const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const black = new THREE.MeshBasicMaterial({ color: 0x1b1a18 });
+    const blush = new THREE.MeshBasicMaterial({ color: 0xff8fb0 });
+    for (const side of [-1, 1]) {
+        const e = new THREE.Mesh(UNIT_BALL, black);
+        e.scale.set(r * 0.8, r, r * 0.5);
+        e.position.set(side * spread, y, z);
+        const shine = new THREE.Mesh(UNIT_BALL, white);
+        shine.scale.setScalar(r * 0.32);
+        shine.position.set(side * spread + r * 0.25, y + r * 0.35, z + r * 0.35);
+        const cheek = new THREE.Mesh(UNIT_BALL, blush);
+        cheek.scale.set(r * 0.7, r * 0.35, r * 0.2);
+        cheek.position.set(side * spread * 1.55, y - r * 1.1, z - r * 0.15);
+        parent.add(e, shine, cheek);
+    }
+}
+
+const CRITTERS = {
+    // A teal jelly with a leaf sprouting from the top.
+    mochi() {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(UNIT_BALL, new THREE.MeshToonMaterial({ color: 0x5fd3c4 }));
+        body.scale.set(1.1, 0.85, 1);
+        body.position.y = 0.85;
+        g.add(body);
+        // On the surface of the jelly, which bulges out to about 0.98 here.
+        eyes(g, 1.0, 0.95, 0.38, 0.17);
+        const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.4, 6), toon(0x4f8a3a));
+        stem.position.y = 1.85;
+        g.add(stem);
+        for (const side of [-1, 1]) {
+            const leaf = new THREE.Mesh(UNIT_BALL, toon(0x6fbf4a));
+            leaf.scale.set(0.35, 0.08, 0.18);
+            leaf.position.set(side * 0.3, 2.05, 0);
+            leaf.rotation.z = side * 0.4;
+            g.add(leaf);
+        }
+        return g;
+    },
+    // A white cloud fox with a big orange tail.
+    cloudfox() {
+        const g = new THREE.Group();
+        const fur = toon(0xf7f4ee);
+        const body = new THREE.Mesh(UNIT_BALL, fur);
+        body.scale.set(0.75, 0.7, 0.8);
+        body.position.y = 0.75;
+        const head = new THREE.Mesh(UNIT_BALL, fur);
+        head.scale.setScalar(0.62);
+        head.position.set(0, 1.65, 0.15);
+        g.add(body, head);
+        eyes(g, 1.72, 0.7, 0.24, 0.12);
+        for (const side of [-1, 1]) {
+            const ear = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.5, 8), fur);
+            ear.position.set(side * 0.35, 2.3, 0.1);
+            ear.rotation.z = -side * 0.3;
+            const inner = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 8), toon(0xffb3c7));
+            inner.position.set(side * 0.35, 2.28, 0.18);
+            inner.rotation.z = -side * 0.3;
+            g.add(ear, inner);
+        }
+        const tail = toon(0xf08a3c);
+        [[0, 0.7, -0.7, 0.45], [0, 1.2, -1.05, 0.42], [0, 1.75, -1.1, 0.36]].forEach(([tx, ty, tz, r]) => {
+            const puff = new THREE.Mesh(UNIT_BALL, tail);
+            puff.scale.setScalar(r);
+            puff.position.set(tx, ty, tz);
+            g.add(puff);
+        });
+        return g;
+    },
+    // A little purple ghost, sticking its tongue out.
+    boo() {
+        const g = new THREE.Group();
+        const glow = new THREE.MeshToonMaterial({ color: 0x9b7bff, emissive: 0x2a1a55 });
+        const head = new THREE.Mesh(UNIT_BALL, glow);
+        head.scale.set(0.9, 0.95, 0.85);
+        head.position.y = 1.5;
+        const skirt = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.75, 0.8, 16), glow);
+        skirt.position.y = 0.85;
+        g.add(head, skirt);
+        for (let i = 0; i < 6; i++) {
+            const a = (i / 6) * Math.PI * 2;
+            const bump = new THREE.Mesh(UNIT_BALL, glow);
+            bump.scale.setScalar(0.26);
+            bump.position.set(Math.sin(a) * 0.6, 0.45, Math.cos(a) * 0.6);
+            g.add(bump);
+        }
+        eyes(g, 1.6, 0.78, 0.32, 0.15);
+        const tongue = new THREE.Mesh(UNIT_BALL, toon(0xff6f91));
+        tongue.scale.set(0.16, 0.08, 0.14);
+        tongue.position.set(0, 1.2, 0.82);
+        g.add(tongue);
+        g.position.y = 0.4;
+        return g;
+    },
+    // A round red chick with a flame for a crest.
+    ember() {
+        const g = new THREE.Group();
+        const body = new THREE.Mesh(UNIT_BALL, toon(0xe04a2f));
+        body.scale.set(0.95, 0.9, 0.9);
+        body.position.y = 1;
+        const belly = new THREE.Mesh(UNIT_BALL, toon(0xffe0b0));
+        belly.scale.set(0.6, 0.55, 0.3);
+        belly.position.set(0, 0.85, 0.7);
+        const beak = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.3, 8), toon(0xf5b82e));
+        beak.rotation.x = Math.PI / 2;
+        beak.position.set(0, 1.15, 0.95);
+        g.add(body, belly, beak);
+        eyes(g, 1.35, 0.78, 0.3, 0.13);
+        [[0, 2.15, 0, 0.55, 0xff9a2e], [-0.18, 2.0, -0.05, 0.4, 0xffd24a], [0.2, 1.98, 0, 0.36, 0xff6a2e]].forEach(([fx, fy, fz, hgt, color]) => {
+            const flame = new THREE.Mesh(new THREE.ConeGeometry(0.16, hgt, 8), new THREE.MeshBasicMaterial({ color }));
+            flame.position.set(fx, fy, fz);
+            g.add(flame);
+        });
+        for (const side of [-1, 1]) {
+            const wing = new THREE.Mesh(UNIT_BALL, toon(0xb8341f));
+            wing.scale.set(0.12, 0.35, 0.3);
+            wing.position.set(side * 0.9, 1.05, 0);
+            wing.rotation.z = side * 0.4;
+            const foot = new THREE.Mesh(UNIT_BALL, toon(0xf5b82e));
+            foot.scale.set(0.18, 0.08, 0.26);
+            foot.position.set(side * 0.35, 0.08, 0.2);
+            g.add(wing, foot);
+        }
+        return g;
+    },
+};
+const CRITTER_KINDS = Object.keys(CRITTERS);
+
+// A critter at a given size, standing on the floor (or on something `lift` tall).
+function critter(parent, kind, x, z, size = 1, turn = 0, lift = 0) {
+    const g = CRITTERS[kind]();
+    g.scale.setScalar(size);
+    g.position.set(x, FLOOR_Y + lift + (g.position.y || 0) * size, z);
+    g.rotation.y = turn;
+    parent.add(deco(g));
+    return g;
+}
+
+/* ----- original anime posters ----- */
+
+const POSTER_TITLES = [
+    ['星の剣', 'sword of stars'], ['夏の夜', 'summer night'], ['ドラゴン', 'dragon'], ['未来', 'the future'],
+    ['サムライ', 'samurai'], ['アニメ', 'anime'], ['放課後', 'after school'], ['必殺技', 'final move'],
+];
+const POSTER_PALETTES = [
+    ['#ff7eb3', '#7afcff', '#2b1a4a'], ['#ff9a3c', '#ffd35c', '#3a1c14'], ['#6a5cff', '#ff5c8a', '#12103a'],
+    ['#3ce0a0', '#f7f06d', '#123a2e'], ['#ff5c5c', '#ffe9a8', '#2a0f18'],
+];
+
+// A poster painted on a canvas: a hero silhouette in front of a big sun with
+// speed lines, or one of the creatures up close, with a title in Japanese.
+function animePoster(rng) {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 360;
+    const ctx = c.getContext('2d');
+    const [a, b, ink] = POSTER_PALETTES[Math.floor(rng() * POSTER_PALETTES.length)];
+    const [title, sub] = POSTER_TITLES[Math.floor(rng() * POSTER_TITLES.length)];
+    const bg = ctx.createLinearGradient(0, 0, 0, 360);
+    bg.addColorStop(0, a);
+    bg.addColorStop(1, b);
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, 256, 360);
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 40; i++) {
+        const ang = rng() * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(128 + Math.cos(ang) * 60, 150 + Math.sin(ang) * 60);
+        ctx.lineTo(128 + Math.cos(ang) * 260, 150 + Math.sin(ang) * 260);
+        ctx.stroke();
+    }
+
+    if (rng() < 0.6) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.beginPath();
+        ctx.arc(128, 140, 70, 0, Math.PI * 2);
+        ctx.fill();
+        // The hero: spiky hair, a coat, a blade across the sun.
+        ctx.fillStyle = ink;
+        ctx.beginPath();
+        ctx.arc(128, 150, 22, 0, Math.PI * 2);
+        ctx.fill();
+        for (let i = 0; i < 7; i++) {
+            const sx = 104 + i * 8;
+            ctx.beginPath();
+            ctx.moveTo(sx, 140);
+            ctx.lineTo(sx + 4 + (i - 3) * 3, 110 - (i % 2) * 10);
+            ctx.lineTo(sx + 8, 140);
+            ctx.fill();
+        }
+        ctx.beginPath();
+        ctx.moveTo(100, 172);
+        ctx.lineTo(156, 172);
+        ctx.lineTo(176, 300);
+        ctx.lineTo(80, 300);
+        ctx.fill();
+        ctx.strokeStyle = ink;
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(60, 110);
+        ctx.lineTo(200, 250);
+        ctx.stroke();
+    } else {
+        // A creature's face, up close.
+        ctx.fillStyle = ['#5fd3c4', '#f7f4ee', '#9b7bff', '#e04a2f'][Math.floor(rng() * 4)];
+        ctx.beginPath();
+        ctx.arc(128, 170, 90, 0, Math.PI * 2);
+        ctx.fill();
+        for (const s of [-1, 1]) {
+            ctx.fillStyle = '#1b1a18';
+            ctx.beginPath();
+            ctx.ellipse(128 + s * 34, 160, 16, 22, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(128 + s * 34 + 6, 152, 6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'rgba(255, 143, 176, 0.8)';
+            ctx.beginPath();
+            ctx.ellipse(128 + s * 58, 195, 14, 8, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.fillStyle = '#fff';
+        for (let i = 0; i < 12; i++) {
+            const sx = rng() * 256;
+            const sy = rng() * 300;
+            ctx.fillRect(sx - 1, sy - 6, 2, 12);
+            ctx.fillRect(sx - 6, sy - 1, 12, 2);
+        }
+    }
+
+    ctx.fillStyle = ink;
+    ctx.font = '900 38px "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(title, 128, 44);
+    ctx.font = '600 16px Inter, Helvetica, Arial, sans-serif';
+    ctx.fillText(sub.toUpperCase(), 128, 340);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 6;
+    ctx.strokeRect(3, 3, 250, 354);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+}
+
+// A poster flat against a surface facing `turn`, at world x, y, z.
+function poster(parent, rng, x, y, z, turn, w = 2.4) {
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 1.4), new THREE.MeshStandardMaterial({ map: animePoster(rng), roughness: 0.7 }));
+    p.position.set(x, FLOOR_Y + y, z);
+    p.rotation.y = turn;
+    parent.add(deco(p));
+    return p;
+}
+
+/* ----- street life ----- */
+
+function vendingMachine(parent, x, z, turn, rng) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    g.rotation.y = turn;
+    const colors = [0xd6362b, 0x2f6fd6, 0xf2efe6];
+    block(g, plain(colors[Math.floor(rng() * colors.length)], { roughness: 0.4 }), [2.6, 5.2, 1.6], [0, 0, 0]);
+    const front = paint(128, (ctx, size) => {
+        ctx.fillStyle = '#e9f4ff';
+        ctx.fillRect(0, 0, size, size);
+        const cans = ['#e0302b', '#2f9e44', '#f2b705', '#1f5fbf', '#ff7eb3', '#8c5a2b'];
+        for (let r = 0; r < 3; r++) {
+            for (let i = 0; i < 6; i++) {
+                ctx.fillStyle = cans[(i + r * 2) % cans.length];
+                ctx.fillRect(8 + i * 20, 12 + r * 30, 12, 22);
+            }
+        }
+        ctx.fillStyle = '#1b1a18';
+        ctx.font = 'bold 18px "Hiragino Sans", sans-serif';
+        ctx.fillText('ドリンク', 18, 118);
+    });
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(2.1, 2.6), new THREE.MeshBasicMaterial({ map: front }));
+    panel.position.set(0, FLOOR_Y + 3.4, 0.82);
+    g.add(deco(panel));
+    const glow = new THREE.PointLight(0xcfe8ff, 6, 8);
+    glow.position.set(0, FLOOR_Y + 3.2, 2);
+    g.add(glow);
+    parent.add(g);
+}
+
+function cherryTree(parent, x, z, rng) {
+    mesh(parent, new THREE.CylinderGeometry(0.35, 0.6, 7, 8), plain(0x5a3a2a), [x, 3.5, z]);
+    const petals = [toon(0xffb7d5), toon(0xff9cc6), toon(0xffd1e3)];
+    for (let i = 0; i < 5; i++) {
+        const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(2 + rng() * 1.2, 1), petals[i % 3]);
+        crown.position.set(x + (rng() - 0.5) * 3.5, FLOOR_Y + 7.5 + rng() * 1.8, z + (rng() - 0.5) * 3.5);
+        parent.add(deco(crown));
+    }
+}
+
+function lanterns(parent, x, z, turn, span = 10) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    g.rotation.y = turn;
+    const post = plain(0x3b2a1c);
+    block(g, post, [0.3, 8, 0.3], [-span / 2, 0, 0]);
+    block(g, post, [0.3, 8, 0.3], [span / 2, 0, 0]);
+    const red = new THREE.MeshBasicMaterial({ color: 0xe0452b });
+    for (let i = 1; i < 6; i++) {
+        const lx = -span / 2 + (i * span) / 6;
+        const l = new THREE.Mesh(UNIT_BALL, red);
+        l.scale.set(0.45, 0.6, 0.45);
+        l.position.set(lx, FLOOR_Y + 7.2 - Math.sin((i / 6) * Math.PI) * 0.6, 0);
+        g.add(deco(l));
+    }
+    const glow = new THREE.PointLight(0xff8a5c, 8, 14);
+    glow.position.set(0, FLOOR_Y + 6.5, 0);
+    g.add(glow);
+    parent.add(g);
+}
+
+function statue(parent, x, z, rng) {
+    block(parent, plain(0x9a9384), [2.6, 1.6, 2.6], [x, 0, z]);
+    critter(parent, CRITTER_KINDS[Math.floor(rng() * CRITTER_KINDS.length)], x, z, 1.4, rng() * Math.PI * 2, 1.6);
+}
+
+// Whatever street spots are left over after the easter eggs get something to
+// look at, up to a limit.
+function streetLife(root, spots, rng, opts = {}) {
+    const limit = opts.limit ?? 16;
+    for (let i = 0; i < Math.min(limit, spots.length); i++) {
+        const [x, z] = spots.splice(Math.floor(rng() * spots.length), 1)[0];
+        const roll = rng();
+        const turn = Math.floor(rng() * 4) * (Math.PI / 2);
+        if (roll < 0.3) cafeSet(root, x, z, rng);
+        else if (roll < 0.47) vendingMachine(root, x, z, turn, rng);
+        else if (roll < 0.62) statue(root, x, z, rng);
+        else if (roll < 0.74) bench(root, x, z, turn);
+        else if (roll < 0.87 && opts.trees) cherryTree(root, x, z, rng);
+        else if (opts.lanterns) lanterns(root, x, z, turn);
+        else critter(root, CRITTER_KINDS[Math.floor(rng() * CRITTER_KINDS.length)], x, z, 1.1, rng() * Math.PI * 2);
+    }
+}
+
+/* ----- real buildings ----- */
+
+// A wall texture with a window painted into every tile, so a whole building
+// front is one material. Style picks the window: shuttered, plain or high.
+function facadeTexture(base, style = 'plain') {
+    return paint(256, (ctx, size) => {
+        base(ctx, size);
+        if (style === 'none') return;
+        const lit = Math.random() < 0.3;
+        const wx = size * 0.3;
+        const wy = style === 'high' ? size * 0.12 : size * 0.26;
+        const ww = size * 0.4;
+        const wh = style === 'high' ? size * 0.22 : size * 0.44;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
+        ctx.fillRect(wx - 6, wy - 6, ww + 12, wh + 14);
+        ctx.fillStyle = lit ? '#f4d99a' : '#26303a';
+        ctx.fillRect(wx, wy, ww, wh);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)';
+        ctx.fillRect(wx + 4, wy + 4, ww * 0.35, wh * 0.4);
+        ctx.fillStyle = '#e8e2d4';
+        ctx.fillRect(wx + ww / 2 - 2, wy, 4, wh);
+        ctx.fillRect(wx, wy + wh / 2 - 2, ww, 4);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+        ctx.fillRect(wx - 8, wy + wh + 2, ww + 16, 8);
+        if (style === 'shutter') {
+            ctx.fillStyle = '#2f7f9a';
+            ctx.fillRect(wx - ww * 0.42, wy, ww * 0.38, wh);
+            ctx.fillRect(wx + ww * 1.04, wy, ww * 0.38, wh);
+        }
+    });
+}
+
+// A building box with its front on the four sides and a plain roof on top.
+function facadeBox(root, texture, roof, w, h, d, x, z) {
+    const side = (across) => {
+        const map = texture.clone();
+        map.repeat.set(Math.max(1, Math.round(across / 4)), Math.max(1, Math.round(h / 4)));
+        map.needsUpdate = true;
+        return new THREE.MeshStandardMaterial({ map, roughness: 0.9 });
+    };
+    const wFace = side(w);
+    const dFace = side(d);
+    const box = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [dFace, dFace, roof, roof, wFace, wFace]);
+    box.position.set(x, FLOOR_Y + h / 2, z);
+    root.add(box);
+    return box;
+}
+
+// A door, an awning over it, sometimes a poster and something on the roof,
+// on the face of the building that looks back toward the middle of the map.
+function dressBuilding(root, x, z, w, d, h, rng, opts = {}) {
+    const towardX = Math.abs(x) > Math.abs(z);
+    const sign = towardX ? -Math.sign(x) || 1 : -Math.sign(z) || 1;
+    const turn = towardX ? (sign > 0 ? Math.PI / 2 : -Math.PI / 2) : (sign > 0 ? 0 : Math.PI);
+    const faceX = towardX ? x + sign * (w / 2 + 0.06) : x;
+    const faceZ = towardX ? z : z + sign * (d / 2 + 0.06);
+    const along = towardX ? d : w;
+    const offset = (rng() - 0.5) * (along - 6);
+    const ox = towardX ? 0 : offset;
+    const oz = towardX ? offset : 0;
+
+    const door = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 4), new THREE.MeshStandardMaterial({ color: opts.door ?? 0x4a3020, roughness: 0.8 }));
+    door.position.set(faceX + ox, FLOOR_Y + 2, faceZ + oz);
+    door.rotation.y = turn;
+    root.add(deco(door));
+    const frame = new THREE.Mesh(new THREE.PlaneGeometry(2.9, 4.4), plain(0xd8d0c0));
+    frame.position.set(faceX + ox - (towardX ? sign * 0.01 : 0), FLOOR_Y + 2.2, faceZ + oz - (towardX ? 0 : sign * 0.01));
+    frame.rotation.y = turn;
+    root.add(deco(frame));
+
+    if (opts.awnings) {
+        const colors = opts.awnings;
+        const awning = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 1.6), plain(colors[Math.floor(rng() * colors.length)]));
+        const out = 0.8;
+        awning.position.set(faceX + ox + (towardX ? sign * out : 0), FLOOR_Y + 4.6, faceZ + oz + (towardX ? 0 : sign * out));
+        awning.rotation.y = turn;
+        awning.rotateX(0.3);
+        root.add(deco(awning));
+    }
+    if (rng() < (opts.posters ?? 0.35)) {
+        const px = towardX ? faceX + sign * 0.02 : faceX + ox + (offset > 0 ? -3.4 : 3.4);
+        const pz = towardX ? faceZ + oz + (offset > 0 ? -3.4 : 3.4) : faceZ + sign * 0.02;
+        poster(root, rng, px, 3.2, pz, turn, 2.2);
+    }
+    if (opts.roofUnits !== false && rng() < 0.5) {
+        const ac = block(root, plain(0xb9bcc1, { metalness: 0.3 }), [2.2, 1.4, 1.6], [x + (rng() - 0.5) * (w - 4), h, z + (rng() - 0.5) * (d - 4)]);
+        deco(ac);
+    }
+}
+
+/* ----- rooms you can walk into ----- */
+
+// A plain hollow building: door in the front (+Z) wall, a flat roof. The
+// gallery is built the same way; this is the shell the other rooms share.
+function roomShell(root, spot, wallMaterial, { W = 24, D = 16, H = 9, sign, light = 0xffe2b8 } = {}) {
+    const g = new THREE.Group();
+    g.position.set(spot.x, 0, spot.z);
+    g.rotation.y = spot.turn;
+    root.add(g);
+    const T = 0.6;
+    const wall = wallMaterial(W, H);
+    block(g, wall, [W, H, T], [0, 0, -D / 2]);
+    block(g, wall, [T, H, D], [-W / 2, 0, 0]);
+    block(g, wall, [T, H, D], [W / 2, 0, 0]);
+    const side = W / 2 - 2.5;
+    block(g, wall, [side, H, T], [-(2.5 + side / 2), 0, D / 2]);
+    block(g, wall, [side, H, T], [2.5 + side / 2, 0, D / 2]);
+    block(g, wall, [5, H - 7, T], [0, 7, D / 2]);
+    flagWalkable(block(g, plain(0x7d7568), [W + 1, 0.8, D + 1], [0, H, 0]));
+    const lamp = new THREE.PointLight(light, 55, 32);
+    lamp.position.set(0, FLOOR_Y + H - 2, 0);
+    g.add(lamp);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(W - 1, D - 1), surface(paint(128, planks('#7a5332', '#4a3220')), 6, 4));
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = FLOOR_Y + 0.03;
+    g.add(deco(floor));
+    if (sign) {
+        const board = new THREE.Mesh(new THREE.PlaneGeometry(8, 1.4), new THREE.MeshBasicMaterial({ map: labelTexture(sign, { bg: '#1c1a17', fg: '#f0e9dd' }) }));
+        board.position.set(0, FLOOR_Y + H - 1.2, D / 2 + T / 2 + 0.05);
+        g.add(deco(board));
+    }
+    return { g, W, D, H, inner: D / 2 - T / 2, wx: W / 2 - T / 2 };
+}
+
+// A ramen café: noren over the door, a counter with stools, tables and
+// chairs, red lanterns, a menu board, a lucky cat and creature plushies.
+function animeCafe(root, spot, wallMaterial, rng) {
+    const { g, W, D, inner, wx } = roomShell(root, spot, wallMaterial, { sign: ['anime café', 'ラーメン · 定食'], light: 0xffd2a8 });
+
+    const cloth = new THREE.MeshStandardMaterial({
+        map: labelTexture(['ラーメン'], { width: 512, height: 256, bg: '#1f2a4a', fg: '#f4efe4', size: 110 }),
+        side: THREE.DoubleSide,
+        roughness: 1,
+    });
+    const noren = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 2.2), cloth);
+    noren.position.set(0, FLOOR_Y + 5.9, D / 2 + 0.45);
+    g.add(deco(noren));
+
+    // The counter along the back, with stools and a menu above it.
+    block(g, WOODS[2], [14, 2.4, 1.6], [0, 0, -D / 2 + 2.2]);
+    block(g, WOODS[1], [14.4, 0.2, 1.9], [0, 2.4, -D / 2 + 2.2]);
+    for (let i = 0; i < 5; i++) stool(g, -5.6 + i * 2.8, -D / 2 + 4);
+    const menu = labelTexture(['お品書き · menu', 'ramen ¥900 · gyoza ¥450 · matcha ¥300 · onigiri ¥200'], { width: 1024, height: 256, bg: '#2a1d14', fg: '#f4d99a', size: 70 });
+    const board = new THREE.Mesh(new THREE.PlaneGeometry(10, 2.5), new THREE.MeshBasicMaterial({ map: menu }));
+    board.position.set(0, FLOOR_Y + 6, -inner + 0.05);
+    g.add(deco(board));
+
+    // A lucky cat on the counter, waving.
+    const cat = new THREE.Group();
+    const white = toon(0xf7f4ee);
+    const body = new THREE.Mesh(UNIT_BALL, white);
+    body.scale.set(0.45, 0.5, 0.4);
+    body.position.y = 0.5;
+    const head = new THREE.Mesh(UNIT_BALL, white);
+    head.scale.setScalar(0.4);
+    head.position.y = 1.15;
+    const paw = new THREE.Mesh(UNIT_BALL, white);
+    paw.scale.set(0.13, 0.28, 0.13);
+    paw.position.set(0.38, 1.3, 0.1);
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.3, 0.05, 6, 16), toon(0xd6362b));
+    collar.rotation.x = Math.PI / 2;
+    collar.position.y = 0.85;
+    const bell = new THREE.Mesh(UNIT_BALL, metal(0xd9a441, 0.3, 0.8));
+    bell.scale.setScalar(0.08);
+    bell.position.set(0, 0.8, 0.32);
+    cat.add(body, head, paw, collar, bell);
+    eyes(cat, 1.2, 0.36, 0.15, 0.06);
+    cat.position.set(5.5, FLOOR_Y + 2.5, -D / 2 + 2.2);
+    g.add(deco(cat));
+
+    // Tables and chairs through the middle, leaving the doorway clear.
+    for (const [tx, tz] of [[-7, 0.5], [7, 0.5], [-7, 5], [7, 5]]) {
+        table(g, tx, tz, 1.2);
+        chair(g, tx - 2, tz, Math.PI / 2);
+        chair(g, tx + 2, tz, -Math.PI / 2);
+    }
+
+    // Red lanterns over the tables.
+    const red = new THREE.MeshBasicMaterial({ color: 0xe0452b });
+    for (const lx of [-7, 0, 7]) {
+        const l = new THREE.Mesh(UNIT_BALL, red);
+        l.scale.set(0.5, 0.7, 0.5);
+        l.position.set(lx, FLOOR_Y + 7, 2.5);
+        g.add(deco(l));
+    }
+
+    // Plushies on a shelf, posters on the side walls.
+    block(g, WOODS[1], [0.8, 0.2, 7], [-wx + 0.5, 4.2, 1]);
+    CRITTER_KINDS.forEach((kind, i) => critter(g, kind, -wx + 0.6, -1.6 + i * 1.7, 0.5, Math.PI / 2, 4.3));
+    poster(g, rng, -wx + 0.06, 6.8, -3, Math.PI / 2);
+    poster(g, rng, wx - 0.06, 5.2, -3, -Math.PI / 2);
+    poster(g, rng, wx - 0.06, 5.2, 2.5, -Math.PI / 2);
+    return g;
+}
+
+// My kind of room: a couch in front of a TV with my anime night on it, bean
+// bags, a desk with csgo up, a shelf of figures, a futon, posters and LEDs.
+function otakuDen(root, spot, wallMaterial, rng) {
+    const { g, D, inner, wx } = roomShell(root, spot, wallMaterial, { sign: ['otaku den', 'オタクの部屋'], light: 0xd7c8ff });
+
+    // The TV on its stand, playing a photo from the site.
+    block(g, plain(0x1b1c1e), [7, 1.6, 1.4], [0, 0, -inner + 0.9]);
+    block(g, plain(0x0e0e10), [7.4, 4.3, 0.3], [0, 1.9, -inner + 0.5]);
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(7, 3.94), new THREE.MeshBasicMaterial({ map: imageTexture('images/web/IMG_3888.jpg', 7, 3.94) }));
+    screen.position.set(0, FLOOR_Y + 4.05, -inner + 0.7);
+    g.add(deco(screen));
+
+    // The couch facing it, bean bags either side.
+    const fabric = plain(0x3a3f6b);
+    block(g, fabric, [8, 1.4, 2.4], [0, 0, 2]);
+    block(g, fabric, [8, 2.6, 0.6], [0, 0, 3.2]);
+    block(g, fabric, [0.6, 2, 2.4], [-4.3, 0, 2]);
+    block(g, fabric, [0.6, 2, 2.4], [4.3, 0, 2]);
+    for (const [bx, color] of [[-7.5, 0xff7eb3], [7.5, 0x7afcff]]) {
+        const bag = new THREE.Mesh(UNIT_BALL, toon(color));
+        bag.scale.set(1.3, 0.8, 1.3);
+        bag.position.set(bx, FLOOR_Y + 0.8, 0.5);
+        g.add(bag);
+    }
+    const rug = new THREE.Mesh(new THREE.PlaneGeometry(10, 6), new THREE.MeshStandardMaterial({ map: paint(128, carpet), roughness: 1 }));
+    rug.rotation.x = -Math.PI / 2;
+    rug.position.set(0, FLOOR_Y + 0.05, -1);
+    g.add(deco(rug));
+
+    // The desk: monitor on csgo, a gaming chair in front.
+    block(g, plain(0x222325), [2.4, 2.4, 5], [-wx + 1.5, 0, 4]);
+    const monitor = new THREE.Mesh(new THREE.PlaneGeometry(3, 1.8), new THREE.MeshBasicMaterial({ map: paint(256, (ctx, size) => {
+        const sky = ctx.createLinearGradient(0, 0, 0, size);
+        sky.addColorStop(0, '#8fb3d9');
+        sky.addColorStop(0.45, '#f1d9a6');
+        sky.addColorStop(0.46, '#c9a46a');
+        sky.addColorStop(1, '#a8834d');
+        ctx.fillStyle = sky;
+        ctx.fillRect(0, 0, size, size);
+        ctx.strokeStyle = '#3cff3c';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(size / 2 - 3, size / 2 - 14, 6, 28);
+        ctx.fillStyle = '#f0e9dd';
+        ctx.font = 'bold 24px monospace';
+        ctx.fillText('100', 12, size - 16);
+        ctx.fillText('30/90', size - 90, size - 16);
+    }) }));
+    monitor.position.set(-wx + 0.4, FLOOR_Y + 3.6, 4);
+    monitor.rotation.y = Math.PI / 2;
+    g.add(deco(monitor));
+    const gamer = chair(g, -wx + 4, 4, -Math.PI / 2, plain(0x1b1b1b), plain(0xd6362b));
+    gamer.children[gamer.children.length - 1].scale.y = 1.6;
+
+    // Figures and creatures on a shelf unit.
+    const shelfWood = WOODS[2];
+    for (let level = 0; level < 3; level++) block(g, shelfWood, [1.2, 0.2, 6], [wx - 0.8, 1.6 + level * 2, 3]);
+    block(g, shelfWood, [1.2, 6, 0.2], [wx - 0.8, 0, 0]);
+    block(g, shelfWood, [1.2, 6, 0.2], [wx - 0.8, 0, 6]);
+    for (let level = 0; level < 3; level++) {
+        for (let i = 0; i < 3; i++) {
+            critter(g, CRITTER_KINDS[(level + i) % CRITTER_KINDS.length], wx - 0.8, 1.2 + i * 1.8, 0.42, -Math.PI / 2, 1.8 + level * 2);
+        }
+    }
+
+    // A futon in the back corner.
+    block(g, plain(0x2b2d35), [4.5, 0.6, 3], [wx - 3, 0, -inner + 2]);
+    block(g, plain(0xff9cc6), [4.3, 0.3, 2.4], [wx - 3, 0.6, -inner + 2.2]);
+    block(g, plain(0xf2efe6), [1.6, 0.4, 0.9], [wx - 3, 0.9, -inner + 0.9]);
+
+    // Posters on every wall, and a purple LED strip round the ceiling.
+    poster(g, rng, -wx + 0.06, 5.4, -3.5, Math.PI / 2);
+    poster(g, rng, wx - 0.06, 6.3, -3.8, -Math.PI / 2);
+    poster(g, rng, -5.5, 6, -inner + 0.06, 0);
+    poster(g, rng, 5.5, 6, -inner + 0.06, 0);
+    const led = new THREE.MeshBasicMaterial({ color: 0xb14dff });
+    for (const [lw, ld, lx, lz] of [[23, 0.2, 0, -inner + 0.1], [0.2, 15, -wx + 0.1, 0], [0.2, 15, wx - 0.1, 0]]) {
+        const strip = new THREE.Mesh(new THREE.BoxGeometry(lw, 0.15, ld), led);
+        strip.position.set(lx, FLOOR_Y + 8.6, lz);
+        g.add(deco(strip));
+    }
+    return g;
+}
+
+// Where the two rooms go on a standard wide map; the gallery has its own spot.
+const ROOM_SPOTS = [
+    { x: -62, z: 50, turn: Math.PI / 2, kind: 'cafe' },
+    { x: 62, z: -75, turn: -Math.PI / 2, kind: 'otaku' },
+];
+
 /* ----- textures ----- */
 
 function pavers(base, line, cells) {
@@ -1305,6 +2024,7 @@ function buildDust2(root, opts = {}) {
 
     if (!opts.wide) return { fog: [0xf1d9a6, 45, 140], halo: 0x3a2a18 };
     let bMarked = false;
+    const dustFront = facadeTexture(sandstone, 'plain');
     outskirts(root, {
         seed: 2,
         gallery: GALLERY_SPOT,
@@ -1312,9 +2032,11 @@ function buildDust2(root, opts = {}) {
         inner: [-36, 36, -38, 34],
         // Long past the arch, and a lane out of every gap in the walls.
         keepClear: [[-6, 16, -115, -36], [-100, -34, -18, 6], [34, 100, -26, -4], [-12, 12, 32, 90]],
-        building: (x, z, w, d, h) => {
-            block(root, surface(stone, w / 5, h / 5), [w, h, d], [x, 0, z]);
+        life: { limit: 14 },
+        building: (x, z, w, d, h, rng) => {
+            facadeBox(root, dustFront, plain(0xc9a46a), w, h, d, x, z);
             block(root, trim, [w + 0.8, 0.8, d + 0.8], [x, h, z]);
+            dressBuilding(root, x, z, w, d, h, rng, { awnings: [0xd94f3d, 0x3f6fb5, 0xe8c547, 0x2f7f6a] });
             // The B site marker goes on the first building out to the left.
             if (!bMarked && x < -40 && Math.abs(z) < 40) {
                 bMarked = true;
@@ -1408,6 +2130,7 @@ function buildMirage(root, opts = {}) {
     outskirts(root, {
         seed: 3,
         gallery: GALLERY_SPOT,
+        life: { lanterns: true },
         stairs: plain(0xc4a171),
         inner: [-42, 42, -46, 30],
         keepClear: [[-10, 10, -115, 90], [-100, 100, -6, 10]],
@@ -1424,6 +2147,7 @@ function buildMirage(root, opts = {}) {
                     block(root, shutter, [0.9, 2.4, 0.2], [wx + 1.4, h * 0.55, wz]);
                 }
             }
+            dressBuilding(root, x, z, w, d, h, rng, { awnings: [0xc2462c, 0xe8d6b3, 0x2f7f9a], door: 0x2f5f7a });
             if (rng() < 0.3) {
                 const r = Math.min(w, d) * 0.35;
                 const cap = new THREE.Mesh(
@@ -1553,12 +2277,17 @@ function buildInferno(root, opts = {}) {
     outskirts(root, {
         seed: 4,
         gallery: GALLERY_SPOT,
+        life: { lanterns: true, trees: true },
         inner: [-42, 42, -56, 28],
         // A banana-style lane running out the side, and the main street.
         keepClear: [[-10, 10, -115, -56], [-100, -42, 8, 24], [42, 100, -20, -6]],
         heights: [9, 14],
         building: (x, z, w, d, h, rng) => {
-            house(x, z, w, h, d, walls[Math.floor(rng() * walls.length)], Math.floor(rng() * 4) * (Math.PI / 2));
+            const quarter = Math.floor(rng() * 4);
+            house(x, z, w, h, d, walls[Math.floor(rng() * walls.length)], quarter * (Math.PI / 2));
+            // A turned house swaps its width and depth on the ground.
+            const [fw, fd] = quarter % 2 ? [d, w] : [w, d];
+            dressBuilding(root, x, z, fw, fd, h, rng, { awnings: [0x4f7a3a, 0xc2412f, 0xe8d3b0], roofUnits: false, posters: 0.3 });
         },
         prop: (x, z, rng) => {
             if (rng() < 0.5) {
@@ -1654,8 +2383,9 @@ function buildNuke(root, opts = {}) {
         keepClear: [[-8, 8, 30, 90], [-100, -44, -12, 4], [46, 100, -30, -14]],
         heights: [10, 18],
         building: (x, z, w, d, h, rng) => {
-            const skin = paint(128, sidings[Math.floor(rng() * sidings.length)]);
-            block(root, surface(skin, w / 4, h / 8), [w, h, d], [x, 0, z]);
+            const front = facadeTexture(sidings[Math.floor(rng() * sidings.length)], 'high');
+            facadeBox(root, front, plain(0x5f6468), w, h, d, x, z);
+            dressBuilding(root, x, z, w, d, h, rng, { door: 0x5f6468, posters: 0.3 });
             block(root, plain(0x5f6468), [w + 0.6, 0.8, d + 0.6], [x, h, z]);
             block(root, surface(stripes, w / 4, 1), [w + 0.2, 1.2, d + 0.2], [x, 0, z]);
         },
@@ -1766,6 +2496,11 @@ function buildVertigo(root, opts = {}) {
     outskirts(root, {
         seed: 6,
         gallery: { x: 40, z: 12, turn: -Math.PI / 2 },
+        rooms: [
+            { x: -40, z: 12, turn: Math.PI / 2, kind: 'cafe' },
+            { x: 40, z: -60, turn: -Math.PI / 2, kind: 'otaku' },
+        ],
+        life: { limit: 10 },
         galleryWall: (w, h) => surface(slab, w / 6, h / 6),
         inner: [-30, 30, -45, 25],
         outer: [deck.x0 + 2, deck.x1 - 2, deck.z0 + 2, deck.z1 - 2],
@@ -1874,6 +2609,7 @@ function buildAncient(root, opts = {}) {
     outskirts(root, {
         seed: 7,
         gallery: GALLERY_SPOT,
+        life: { trees: true, lanterns: true },
         inner: [-36, 36, -90, 26],
         keepClear: [[-8, 8, 26, 90], [-100, -36, -30, -16], [36, 100, -30, -16]],
         density: 0.5,
