@@ -19,6 +19,7 @@ const SOUND_KEY = 'aim.sound';
 const SENS_KEY = 'aim.sensitivity';
 const RELOAD_KEY = 'aim.reload';
 const AK_MODE_KEY = 'aim.akMode';
+const EGGS_KEY = 'aim.eggs';
 const MODE_KEY = 'aim.mode';
 const DIFFICULTY_KEY = 'aim.difficulty';
 const BOT_COUNT_KEY = 'aim.botCount';
@@ -98,6 +99,7 @@ const elTargetRow = document.getElementById('aimTargetRow');
 const elScoreLabel = document.getElementById('aimScoreLabel');
 const elAccLabel = document.getElementById('aimAccLabel');
 const elHealth = document.getElementById('aimHealth');
+const elEggs = document.getElementById('aimEggs');
 const elSound = document.getElementById('aimSound');
 const elFullscreen = document.getElementById('aimFullscreen');
 const elSensRange = document.getElementById('aimSensRange');
@@ -353,6 +355,8 @@ function buildRange(root, opts = {}) {
     };
     outskirts(root, {
         seed: 11,
+        gallery: { x: 56, z: 50, turn: -Math.PI / 2 },
+        galleryWall: () => face,
         inner: [-12, 12, -12, 12],
         outer: [-78, 78, -78, 78],
         cell: 18,
@@ -465,6 +469,8 @@ function gableRoof(root, material, w, d, h, x, z, pitch = 0.5, turn = 0) {
    seeded random keeps the layout the same every visit. */
 
 const WIDE_BOUNDS = [-95, 95, -110, 85];
+// Where the gallery stands on most maps, door facing the middle.
+const GALLERY_SPOT = { x: 62, z: 48, turn: -Math.PI / 2 };
 
 function seeded(seed) {
     let a = seed >>> 0;
@@ -485,6 +491,13 @@ function outskirts(root, cfg) {
     const outer = cfg.outer || WIDE_BOUNDS;
     const cell = cfg.cell || 22;
     const keep = [cfg.inner.map((v, i) => v + (i % 2 ? 5 : -5)), ...(cfg.keepClear || [])];
+    // The gallery's plot, and the easter eggs still to hide.
+    const spot = cfg.gallery;
+    if (spot) keep.push([spot.x - 10, spot.x + 10, spot.z - 14, spot.z + 18]);
+    const eggQueue = cfg.eggs === false ? [] : [...EGGS];
+    // Open corners of street cells an egg could sit in, gathered as the grid
+    // is laid out and drawn from at random afterwards, so eggs spread out.
+    const eggSpots = [];
     for (let cx = outer[0] + cell / 2; cx < outer[1]; cx += cell) {
         for (let cz = outer[2] + cell / 2; cz < outer[3]; cz += cell) {
             const rect = [cx - cell / 2, cx + cell / 2, cz - cell / 2, cz + cell / 2];
@@ -495,12 +508,48 @@ function outskirts(root, cfg) {
                 const d = range(8, cell - 8);
                 const x = cx + range(-1, 1) * (cell - w - 8) / 2;
                 const z = cz + range(-1, 1) * (cell - d - 8) / 2;
-                cfg.building(x, z, w, d, range(cfg.heights?.[0] ?? 8, cfg.heights?.[1] ?? 16), rng);
-            } else if (roll < 0.93 && cfg.prop) {
-                cfg.prop(cx + range(-5, 5), cz + range(-5, 5), rng);
+                const h = range(cfg.heights?.[0] ?? 8, cfg.heights?.[1] ?? 16);
+                cfg.building(x, z, w, d, h, rng);
+                // Some flat roofs get stairs up the side, to fight from.
+                if (cfg.stairs && h <= 12.5 && rng() < 0.35) roofStairs(root, cfg.stairs, x, z, w, d, h);
+            } else {
+                if (roll < 0.93 && cfg.prop) cfg.prop(cx + range(-5, 5), cz + range(-5, 5), rng);
+                // Kept well inside the edge walls, so every egg can be reached.
+                eggSpots.push([
+                    clamp(cx + cell * 0.3, outer[0] + 5, outer[1] - 5),
+                    clamp(cz - cell * 0.3, outer[2] + 5, outer[3] - 5),
+                ]);
             }
         }
     }
+    // Two eggs are saved for the gallery roof; the rest go out in the streets.
+    const onRoof = spot ? eggQueue.filter((e) => e.roof) : [];
+    const inStreets = eggQueue.filter((e) => !onRoof.includes(e));
+    eggQueue.length = 0;
+    for (const egg of inStreets) {
+        if (!eggSpots.length) {
+            eggQueue.push(egg);
+            continue;
+        }
+        const [ex, ez] = eggSpots.splice(Math.floor(rng() * eggSpots.length), 1)[0];
+        placeEgg(root, egg, ex, ez);
+    }
+    eggQueue.push(...onRoof);
+
+    if (spot) {
+        gallery(root, spot, cfg.galleryWall || cfg.wall);
+        // Anything not hidden in the streets waits up on the gallery roof, for
+        // whoever climbs the stairs.
+        eggQueue.forEach((egg, i) => {
+            const lx = -8 + (i % 3) * 6;
+            const lz = -4 + Math.floor(i / 3) * 7;
+            const c = Math.cos(spot.turn);
+            const sn = Math.sin(spot.turn);
+            const g = placeEgg(root, egg, spot.x + lx * c + lz * sn, spot.z - lx * sn + lz * c);
+            g.position.y = 10.8;
+        });
+    }
+
     // A low wall round the edge: too high to jump, low enough to see over.
     if (cfg.wall) {
         const [x0, x1, z0, z1] = outer;
@@ -512,6 +561,426 @@ function outskirts(root, cfg) {
         block(root, cfg.wall(d, h), [2, h, d], [x0 - 1, 0, (z0 + z1) / 2]);
         block(root, cfg.wall(d, h), [2, h, d], [x1 + 1, 0, (z0 + z1) / 2]);
     }
+}
+
+/* ----- the personal touches: a gallery, stairs, and easter eggs -----
+
+   Every bots-mode map has the same gallery somewhere in it: a room of framed
+   photos from the site with little museum placards, a painted centrepiece of
+   where this all started, and a wall of the places I have worked, with stairs
+   up to a rooftop. Some buildings get stairs to their roofs too. And seven
+   things about me are hidden round each map; shooting one finds it. */
+
+// Photos from the site, and the placards that go under them.
+const GALLERY_PHOTOS = {
+    centre: { src: 'images/aim-inspo.jpg', caption: 'me and my brother · csgo · where this started' },
+    back: [
+        { src: 'images/web/IMG_4528.jpg', caption: 'injera' },
+        { src: 'images/web/IMG_2962.jpg', caption: 'ambo' },
+    ],
+    left: [
+        { src: 'images/web/IMG_3782.jpg', caption: 'golden gate' },
+        { src: 'images/web/IMG_3040.jpg', caption: 'sf at night' },
+        { src: 'images/web/IMG_4097.jpg', caption: 'presenting' },
+        { src: 'images/web/IMG_4860.jpg', caption: 'afrotech' },
+    ],
+    right: [
+        { src: 'images/web/IMG_4486.jpg', caption: 'mit' },
+        { src: 'images/web/IMG_5165.jpg', caption: 'liberty mutual' },
+        { src: 'images/web/IMG_4524.jpg', caption: 'the hat' },
+        { src: 'images/web/IMG_4038.jpg', caption: 'the setup' },
+    ],
+    logos: ['logos/nmdp.png', 'logos/libertymutual.png', 'logos/medica.png', 'logos/medtronic.png', 'logos/gustavus.png'],
+};
+
+// Draws an image to fill a canvas, cropped to fit. As a painting it is laid
+// down as thousands of short strokes in the photo's own colours over a soft
+// underpainting, with a faint canvas weave on top.
+function drawCover(ctx, img, W, H, painting) {
+    const scale = Math.max(W / img.width, H / img.height);
+    const dw = img.width * scale;
+    const dh = img.height * scale;
+    const dx = (W - dw) / 2;
+    const dy = (H - dh) / 2;
+    if (!painting) {
+        ctx.drawImage(img, dx, dy, dw, dh);
+        return;
+    }
+    const sw = 120;
+    const sh = Math.round((120 * H) / W);
+    const small = document.createElement('canvas');
+    small.width = sw;
+    small.height = sh;
+    const sctx = small.getContext('2d');
+    sctx.drawImage(img, (dx * sw) / W, (dy * sh) / H, (dw * sw) / W, (dh * sh) / H);
+    const data = sctx.getImageData(0, 0, sw, sh).data;
+
+    ctx.filter = 'blur(4px) saturate(1.3)';
+    ctx.drawImage(small, 0, 0, W, H);
+    ctx.filter = 'none';
+    ctx.lineCap = 'round';
+    // Broad strokes first, then finer ones on top, the way it would be painted.
+    for (let i = 0; i < 11000; i++) {
+        const fine = i > 6000;
+        const x = Math.random() * W;
+        const y = Math.random() * H;
+        const k = (Math.floor((y * sh) / H) * sw + Math.floor((x * sw) / W)) * 4;
+        const lift = fine ? 12 : 0;
+        ctx.strokeStyle = `rgba(${Math.min(255, data[k] + lift)}, ${Math.min(255, data[k + 1] + lift)}, ${Math.min(255, data[k + 2] + lift)}, 0.92)`;
+        ctx.lineWidth = fine ? 3 + Math.random() * 3 : 7 + Math.random() * 7;
+        const a = Math.random() * Math.PI;
+        const len = fine ? 8 + Math.random() * 12 : 16 + Math.random() * 22;
+        ctx.beginPath();
+        ctx.moveTo(x - (Math.cos(a) * len) / 2, y - (Math.sin(a) * len) / 2);
+        ctx.lineTo(x + (Math.cos(a) * len) / 2, y + (Math.sin(a) * len) / 2);
+        ctx.stroke();
+    }
+    ctx.globalAlpha = 0.06;
+    for (let y = 0; y < H; y += 3) {
+        ctx.fillStyle = y % 6 ? '#000' : '#fff';
+        ctx.fillRect(0, y, W, 1);
+    }
+    ctx.globalAlpha = 1;
+}
+
+// A texture that fills in when its image arrives. Dark until then, so a slow
+// connection shows empty frames rather than nothing.
+function imageTexture(src, w, h, { painting = false, contain = false, background = '#2a2622' } = {}) {
+    const c = document.createElement('canvas');
+    const px = painting ? 1024 : 512;
+    c.width = px;
+    c.height = Math.round((px * h) / w);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, c.width, c.height);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const img = new Image();
+    img.onload = () => {
+        if (contain) {
+            // Logos sit inside a margin on a white card rather than filling it.
+            const pad = c.width * 0.1;
+            const s = Math.min((c.width - pad * 2) / img.width, (c.height - pad * 2) / img.height);
+            ctx.drawImage(img, (c.width - img.width * s) / 2, (c.height - img.height * s) / 2, img.width * s, img.height * s);
+        } else {
+            drawCover(ctx, img, c.width, c.height, painting);
+        }
+        tex.needsUpdate = true;
+    };
+    img.src = src;
+    return tex;
+}
+
+function labelTexture(lines, { width = 512, height = 160, bg = '#efe6d2', fg = '#2a241c', size = 44 } = {}) {
+    const c = document.createElement('canvas');
+    c.width = width;
+    c.height = height;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = fg;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    lines.forEach((line, i) => {
+        ctx.font = `${i === 0 ? 600 : 400} ${i === 0 ? size : size * 0.62}px Inter, Helvetica, Arial, sans-serif`;
+        ctx.fillText(line, width / 2, height / 2 + (i - (lines.length - 1) / 2) * size * 1.05, width - 20);
+    });
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+}
+
+const GOLD = metal(0xb8913a, 0.35, 0.7);
+
+// A framed picture flat against a wall, facing +Z in the group it is added
+// to, with a placard under it.
+function framed(parent, texture, w, h, x, y, z, turn, caption, frame = GOLD) {
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    g.rotation.y = turn;
+    const pic = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshStandardMaterial({ map: texture, roughness: 0.8 }));
+    pic.position.z = 0.06;
+    g.add(pic);
+    const t = 0.28;
+    for (const [bw, bh, bx, by] of [[w + t * 2, t, 0, h / 2 + t / 2], [w + t * 2, t, 0, -h / 2 - t / 2], [t, h, -w / 2 - t / 2, 0], [t, h, w / 2 + t / 2, 0]]) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, 0.22), frame);
+        bar.position.set(bx, by, 0.08);
+        g.add(bar);
+    }
+    if (caption) {
+        const plate = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(w, 3.2), 0.7), new THREE.MeshBasicMaterial({ map: labelTexture([caption], { size: caption.length > 24 ? 30 : 44 }) }));
+        plate.position.set(0, -h / 2 - 0.9, 0.05);
+        g.add(plate);
+    }
+    g.traverse((o) => {
+        o.userData.noCollide = true;
+    });
+    parent.add(g);
+    return g;
+}
+
+// Solid steps up the side of something `rise` tall, climbing along -Z from
+// z0, each no taller than a single step can take.
+function steps(parent, material, x, z0, rise, run, width = 3) {
+    const n = Math.ceil(rise / 1.0);
+    const depth = run / n;
+    for (let i = 0; i < n; i++) {
+        const h = Math.min(rise, ((i + 1) * rise) / n);
+        block(parent, material, [width, h, depth + 0.02], [x, 0, z0 - depth * (i + 0.5)]);
+    }
+}
+
+function flagWalkable(mesh) {
+    mesh.userData.walkable = true;
+    return mesh;
+}
+
+// The gallery. Local frame: door in the front (+Z) wall, stairs up the
+// outside of the +X wall to a rooftop with a parapet.
+function gallery(root, { x, z, turn }, wallMaterial) {
+    const g = new THREE.Group();
+    g.position.set(x, 0, z);
+    g.rotation.y = turn;
+    root.add(g);
+
+    const W = 24;
+    const D = 16;
+    const H = 10;
+    const T = 0.6;
+    const wall = wallMaterial(W, H);
+    block(g, wall, [W, H, T], [0, 0, -D / 2]);
+    block(g, wall, [T, H, D], [-W / 2, 0, 0]);
+    block(g, wall, [T, H, D], [W / 2, 0, 0]);
+    const side = W / 2 - 2.5;
+    block(g, wall, [side, H, T], [-(2.5 + side / 2), 0, D / 2]);
+    block(g, wall, [side, H, T], [2.5 + side / 2, 0, D / 2]);
+    block(g, wall, [5, H - 8, T], [0, 8, D / 2]);
+
+    // A walkable roof with a low parapet, open where the stairs arrive.
+    const roofMat = plain(0x8c8478);
+    flagWalkable(block(g, roofMat, [W + 1, 0.8, D + 1], [0, H, 0]));
+    const lip = plain(0x9a9184);
+    block(g, lip, [W + 1, 1.4, 0.4], [0, H + 0.8, -D / 2 - 0.3]);
+    block(g, lip, [W + 1, 1.4, 0.4], [0, H + 0.8, D / 2 + 0.3]);
+    block(g, lip, [0.4, 1.4, D + 1], [-W / 2 - 0.3, H + 0.8, 0]);
+    block(g, lip, [0.4, 1.4, D - 4], [W / 2 + 0.3, H + 0.8, 2]);
+    steps(g, plain(0x7d7568), W / 2 + 1.8, D / 2 - 0.2, H + 0.8, D - 1.2);
+
+    // Inside: a warm light, wood floor, a rug and a bench.
+    const lamp = new THREE.PointLight(0xffe2b8, 60, 34);
+    lamp.position.set(0, H - 2, 0);
+    g.add(lamp);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(W - 1, D - 1), surface(paint(128, planks('#7a5332', '#4a3220')), 6, 4));
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = FLOOR_Y + 0.03;
+    g.add(floor);
+    const rug = new THREE.Mesh(new THREE.PlaneGeometry(8, 5), new THREE.MeshStandardMaterial({ map: paint(128, carpet), roughness: 1 }));
+    rug.rotation.x = -Math.PI / 2;
+    rug.position.set(0, FLOOR_Y + 0.05, 1);
+    g.add(rug);
+    block(g, plain(0x3b2a1c), [6, 1.2, 1.4], [0, 0, 1]);
+
+    // The walls, hung.
+    const P = GALLERY_PHOTOS;
+    const inner = D / 2 - T / 2;
+    framed(g, imageTexture(P.centre.src, 8, 6.2, { painting: true }), 8, 6.2, 0, FLOOR_Y + 5.4, -inner, 0, P.centre.caption);
+    framed(g, imageTexture(P.back[0].src, 3, 4), 3, 4, -8.2, FLOOR_Y + 5.2, -inner, 0, P.back[0].caption);
+    framed(g, imageTexture(P.back[1].src, 3, 4), 3, 4, 8.2, FLOOR_Y + 5.2, -inner, 0, P.back[1].caption);
+    const wx = W / 2 - T / 2;
+    P.left.forEach((p, i) => framed(g, imageTexture(p.src, 2.6, 3.4), 2.6, 3.4, -wx, FLOOR_Y + 5.2, -5.4 + i * 3.6, Math.PI / 2, p.caption));
+    P.right.forEach((p, i) => framed(g, imageTexture(p.src, 2.6, 3.4), 2.6, 3.4, wx, FLOOR_Y + 5.2, 5.4 - i * 3.6, -Math.PI / 2, p.caption));
+
+    // Where I have worked, on the inside of the front wall.
+    const dark = metal(0x2a2622, 0.6, 0.2);
+    const logoAt = [[-9, 5.5], [-5.6, 5.5], [5.6, 5.5], [9, 5.5], [0, 9]];
+    P.logos.forEach((src, i) => {
+        const [lx, ly] = logoAt[i];
+        framed(g, imageTexture(src, 2.6, 1.3, { contain: true, background: '#ffffff' }), 2.6, 1.3, lx, FLOOR_Y + ly, inner, Math.PI, null, dark);
+    });
+
+    // The sign over the door.
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(8, 1.4), new THREE.MeshBasicMaterial({ map: labelTexture(['youdahe’s gallery', 'come in'], { bg: '#1c1a17', fg: '#f0e9dd' }) }));
+    sign.position.set(0, FLOOR_Y + 8.9, D / 2 + T / 2 + 0.05);
+    sign.userData.noCollide = true;
+    g.add(sign);
+    return g;
+}
+
+// Stairs up the side of a flat-roofed building, so its roof becomes a place
+// to fight from.
+function roofStairs(root, material, x, z, w, d, h) {
+    const g = new THREE.Group();
+    g.position.set(x + w / 2 + 1.6, 0, z);
+    root.add(g);
+    steps(g, material, 0, d / 2, h, d);
+}
+
+/* ----- easter eggs ----- */
+
+let eggMeshes = [];
+
+function eggLabel(text, w, h, size = 44, bg = '#f4efe4', fg = '#b0261c') {
+    return new THREE.MeshBasicMaterial({ map: labelTexture([text], { width: 256, height: Math.round((256 * h) / w), bg, fg, size }) });
+}
+
+const EGG_BUILDERS = {
+    // Ambo, the Ethiopian sparkling water, in its green bottle.
+    ambo() {
+        const g = new THREE.Group();
+        block(g, surface(paint(128, crateTexture)), [1.6, 1.6, 1.6], [0, 0, 0]);
+        const glass = new THREE.MeshStandardMaterial({ color: 0x2f8f3a, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.85 });
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 1.4, 20), glass);
+        body.position.y = FLOOR_Y + 1.6 + 0.7;
+        const label = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.55, 20, 1, true), eggLabel('አምቦ AMBO', 3, 1, 50));
+        label.position.y = FLOOR_Y + 1.6 + 0.7;
+        const shoulder = new THREE.Mesh(new THREE.ConeGeometry(0.34, 0.4, 20), glass);
+        shoulder.position.y = FLOOR_Y + 1.6 + 1.6;
+        const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.5, 12), glass);
+        neck.position.y = FLOOR_Y + 1.6 + 1.95;
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.12, 12), plain(0xc0392b));
+        cap.position.y = FLOOR_Y + 1.6 + 2.24;
+        g.add(body, label, shoulder, neck, cap);
+        return g;
+    },
+    // The beaver: the aim trainer's first target.
+    beaver() {
+        const g = new THREE.Group();
+        const b = makeBeaver();
+        b.scale.setScalar(1.4);
+        b.position.y = FLOOR_Y + 1.25;
+        g.add(b);
+        return g;
+    },
+    // The "artificially intelligent" cap, left on a crate.
+    hat() {
+        const g = new THREE.Group();
+        block(g, surface(paint(128, crateTexture)), [2, 2, 2], [0, 0, 0]);
+        const denim = plain(0x46546a);
+        const crown = new THREE.Mesh(new THREE.SphereGeometry(0.7, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), denim);
+        crown.position.y = FLOOR_Y + 2;
+        const brim = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.06, 0.8), denim);
+        brim.position.set(0, FLOOR_Y + 2.03, 0.9);
+        const words = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.3), eggLabel('artificially intelligent', 3, 1, 24, '#46546a', '#f0e9dd'));
+        words.position.set(0, FLOOR_Y + 2.35, 0.62);
+        words.rotation.x = -0.5;
+        g.add(crown, brim, words);
+        return g;
+    },
+    // A plate of injera with the stews on top, on a low table.
+    injera() {
+        const g = new THREE.Group();
+        block(g, plain(0x5b3a22), [3, 1.8, 3], [0, 0, 0]);
+        const plate = new THREE.Mesh(new THREE.CylinderGeometry(1.3, 1.25, 0.1, 32), plain(0xf2efe8));
+        plate.position.y = FLOOR_Y + 1.85;
+        const bread = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 0.06, 32),
+            new THREE.MeshStandardMaterial({ map: paint(128, speckle('#c9a878', ['#a88a5e', '#dcc29a'], 1400)), roughness: 1 }));
+        bread.position.y = FLOOR_Y + 1.93;
+        g.add(plate, bread);
+        [[0xc2521f, 0.4, 0.3], [0xd9a441, -0.4, 0.3], [0x4f7a2e, 0, -0.45], [0x6b3a1f, -0.5, -0.35], [0xb8341f, 0.5, -0.3]].forEach(([color, sx, sz]) => {
+            const stew = new THREE.Mesh(UNIT_BALL, plain(color));
+            stew.scale.set(0.32, 0.1, 0.32);
+            stew.position.set(sx, FLOOR_Y + 2, sz);
+            g.add(stew);
+        });
+        return g;
+    },
+    // youdaheDB, the database I am writing in Rust, as a little server rack.
+    youdahedb() {
+        const g = new THREE.Group();
+        block(g, plain(0x1b1c1e, { metalness: 0.4 }), [1.8, 3.4, 1.3], [0, 0, 0]);
+        for (let i = 0; i < 5; i++) {
+            block(g, plain(0x2c2e31), [1.6, 0.5, 0.05], [0, 0.35 + i * 0.6, 0.66]);
+            const led = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.05), new THREE.MeshBasicMaterial({ color: i % 2 ? 0x3cff6a : 0x4fb3ff }));
+            led.position.set(0.6, FLOOR_Y + 0.6 + i * 0.6, 0.7);
+            g.add(led);
+        }
+        const tag = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.4), eggLabel('youdaheDB', 4, 1, 60, '#1b1c1e', '#3cff6a'));
+        tag.position.set(0, FLOOR_Y + 3.6, 0.2);
+        g.add(tag);
+        return g;
+    },
+    // The laptop from the photo, open on csgo.
+    laptop() {
+        const g = new THREE.Group();
+        block(g, plain(0x6b4a2c), [3, 1.8, 2], [0, 0, 0]);
+        const silver = plain(0xb9bcc1, { metalness: 0.5, roughness: 0.4 });
+        const base = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 1.2), silver);
+        base.position.y = FLOOR_Y + 1.84;
+        const screen = new THREE.Group();
+        screen.position.set(0, FLOOR_Y + 1.88, -0.6);
+        screen.rotation.x = -0.25;
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.2, 0.06), silver);
+        lid.position.y = 0.6;
+        const game = paint(256, (ctx, size) => {
+            const sky = ctx.createLinearGradient(0, 0, 0, size);
+            sky.addColorStop(0, '#8fb3d9');
+            sky.addColorStop(0.45, '#f1d9a6');
+            sky.addColorStop(0.46, '#c9a46a');
+            sky.addColorStop(1, '#a8834d');
+            ctx.fillStyle = sky;
+            ctx.fillRect(0, 0, size, size);
+            ctx.fillStyle = '#b8945c';
+            ctx.fillRect(size * 0.1, size * 0.3, size * 0.35, size * 0.25);
+            ctx.strokeStyle = '#3cff3c';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(size / 2 - 14, size / 2); ctx.lineTo(size / 2 - 5, size / 2);
+            ctx.moveTo(size / 2 + 5, size / 2); ctx.lineTo(size / 2 + 14, size / 2);
+            ctx.moveTo(size / 2, size / 2 - 14); ctx.lineTo(size / 2, size / 2 - 5);
+            ctx.moveTo(size / 2, size / 2 + 5); ctx.lineTo(size / 2, size / 2 + 14);
+            ctx.stroke();
+            ctx.fillStyle = '#f0e9dd';
+            ctx.font = 'bold 22px monospace';
+            ctx.fillText('100', 12, size - 14);
+            ctx.fillText('30/90', size - 80, size - 14);
+        });
+        const face = new THREE.Mesh(new THREE.PlaneGeometry(1.64, 1.04), new THREE.MeshBasicMaterial({ map: game }));
+        face.position.set(0, 0.6, 0.04);
+        screen.add(lid, face);
+        g.add(base, screen);
+        return g;
+    },
+    // The camera from AfroTech.
+    camera() {
+        const g = new THREE.Group();
+        block(g, surface(paint(128, crateTexture)), [1.8, 1.8, 1.8], [0, 0, 0]);
+        const black = plain(0x1a1a1a, { roughness: 0.6 });
+        const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.5), black);
+        body.position.y = FLOOR_Y + 2.2;
+        const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.34, 0.5, 20), black);
+        lens.rotation.x = Math.PI / 2;
+        lens.position.set(0, FLOOR_Y + 2.15, 0.45);
+        const glass = new THREE.Mesh(new THREE.CircleGeometry(0.24, 20), new THREE.MeshStandardMaterial({ color: 0x1d4a6e, roughness: 0.05, metalness: 0.9 }));
+        glass.position.set(0, FLOOR_Y + 2.15, 0.71);
+        const tag = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.3), eggLabel('AFROTECH', 4, 1, 60, '#1a1a1a', '#f0e9dd'));
+        tag.position.set(0, FLOOR_Y + 2.72, 0.1);
+        g.add(body, lens, glass, tag);
+        return g;
+    },
+};
+
+const EGGS = [
+    { id: 'ambo', note: 'ambo · a taste of home' },
+    { id: 'beaver', note: 'the beaver · this aim trainer’s first target' },
+    { id: 'hat', note: 'artificially intelligent · the hat' },
+    { id: 'injera', note: 'injera · no debate, best food' },
+    { id: 'youdahedb', note: 'youdaheDB · a database, in rust, for fun' },
+    { id: 'laptop', note: 'the laptop · where the csgo addiction started', roof: true },
+    { id: 'camera', note: 'afrotech', roof: true },
+];
+
+function placeEgg(root, egg, x, z) {
+    const g = EGG_BUILDERS[egg.id]();
+    g.position.set(x, 0, z);
+    g.rotation.y = Math.atan2(-x, -z);
+    g.userData.egg = egg;
+    g.traverse((o) => {
+        o.userData.noCollide = true;
+    });
+    root.add(g);
+    eggMeshes.push(g);
+    return g;
 }
 
 /* ----- textures ----- */
@@ -838,6 +1307,8 @@ function buildDust2(root, opts = {}) {
     let bMarked = false;
     outskirts(root, {
         seed: 2,
+        gallery: GALLERY_SPOT,
+        stairs: plain(0xc9a46a),
         inner: [-36, 36, -38, 34],
         // Long past the arch, and a lane out of every gap in the walls.
         keepClear: [[-6, 16, -115, -36], [-100, -34, -18, 6], [34, 100, -26, -4], [-12, 12, 32, 90]],
@@ -936,6 +1407,8 @@ function buildMirage(root, opts = {}) {
     const tiles = paint(256, zellige);
     outskirts(root, {
         seed: 3,
+        gallery: GALLERY_SPOT,
+        stairs: plain(0xc4a171),
         inner: [-42, 42, -46, 30],
         keepClear: [[-10, 10, -115, 90], [-100, 100, -6, 10]],
         building: (x, z, w, d, h, rng) => {
@@ -1079,6 +1552,7 @@ function buildInferno(root, opts = {}) {
     const walls = ['#e2c28f', '#e8d3b0', '#d9a877', '#e5c9a0', '#d8b184', '#ead9bd'];
     outskirts(root, {
         seed: 4,
+        gallery: GALLERY_SPOT,
         inner: [-42, 42, -56, 28],
         // A banana-style lane running out the side, and the main street.
         keepClear: [[-10, 10, -115, -56], [-100, -42, 8, 24], [42, 100, -20, -6]],
@@ -1174,6 +1648,8 @@ function buildNuke(root, opts = {}) {
     const boxes = [['#c8642d', '#8f3f18'], ['#3f7a4a', '#2a5332'], ['#9b2f2f', '#6b1f1f'], ['#4f86c2', '#2f5a8c']];
     outskirts(root, {
         seed: 5,
+        gallery: GALLERY_SPOT,
+        stairs: plain(0x6f7477, { metalness: 0.4 }),
         inner: [-44, 46, -80, 30],
         keepClear: [[-8, 8, 30, 90], [-100, -44, -12, 4], [46, 100, -30, -14]],
         heights: [10, 18],
@@ -1289,6 +1765,8 @@ function buildVertigo(root, opts = {}) {
     // More of the unfinished floor: column stubs, cover walls, pallets, tarps.
     outskirts(root, {
         seed: 6,
+        gallery: { x: 40, z: 12, turn: -Math.PI / 2 },
+        galleryWall: (w, h) => surface(slab, w / 6, h / 6),
         inner: [-30, 30, -45, 25],
         outer: [deck.x0 + 2, deck.x1 - 2, deck.z0 + 2, deck.z1 - 2],
         cell: 20,
@@ -1395,6 +1873,7 @@ function buildAncient(root, opts = {}) {
     // and more trees between them.
     outskirts(root, {
         seed: 7,
+        gallery: GALLERY_SPOT,
         inner: [-36, 36, -90, 26],
         keepClear: [[-8, 8, 26, 90], [-100, -36, -30, -16], [36, 100, -30, -16]],
         density: 0.5,
@@ -1442,6 +1921,7 @@ function selectMap(id) {
     });
     envRoot.clear();
     skyMesh = null;
+    eggMeshes = [];
 
     builtWide = botsMode();
     const made = mapKind.build(envRoot, { wide: builtWide }) || {};
@@ -3434,12 +3914,19 @@ function fire(ndc) {
     // Bots mode: the bullet (or each pellet) goes into the map and the bots.
     if (botsMode()) {
         camera.updateMatrixWorld();
+        // Anything hidden along the line of the shot, checked before the bots
+        // move the raycaster on.
+        raycaster.setFromCamera(aim, camera);
+        const eggHit = eggMeshes.length ? raycaster.intersectObjects(eggMeshes, true)[0] : null;
         let landed = false;
+        let nearestWall = Infinity;
         for (let i = 0; i < (weapon.pellets || 1); i++) {
             raycaster.setFromCamera(weapon.pellets ? wander(weapon.pelletSpread) : aim, camera);
             const result = bots.shoot(raycaster.ray, weapon.id, weapon.label);
             if (result.hit) landed = true;
+            else nearestWall = Math.min(nearestWall, result.wallDist ?? Infinity);
         }
+        if (!landed && eggHit && eggHit.distance <= nearestWall + 0.05) findEgg(eggHit.object);
         if (landed) {
             hits++;
             tone({ at: 0.02, from: 1300, to: 1050, decay: 0.08, volume: 0.1, type: 'triangle' });
@@ -3635,6 +4122,55 @@ function updateHud() {
     elAcc.textContent = `${accuracy()}%`;
 }
 
+/* ---------- easter eggs, found ---------- */
+
+let foundEggs = new Set();
+let eggNoteTimer = 0;
+
+function findEgg(object) {
+    let g = object;
+    while (g && !g.userData.egg) g = g.parent;
+    if (!g) return;
+    const egg = g.userData.egg;
+    g.userData.spinStart = performance.now();
+    g.userData.baseTurn ??= g.rotation.y;
+    g.userData.baseY ??= g.position.y;
+    const isNew = !foundEggs.has(egg.id);
+    if (isNew) {
+        foundEggs.add(egg.id);
+        remember(EGGS_KEY, JSON.stringify([...foundEggs]));
+        // A little rising chime for a new one.
+        [880, 1109, 1319, 1760].forEach((f, i) => tone({ at: i * 0.08, from: f, to: f, decay: 0.22, volume: 0.14, type: 'triangle' }));
+    }
+    setNote(`${isNew ? 'easter egg found' : 'already found'} · ${egg.note} · ${foundEggs.size}/${EGGS.length}`);
+    clearTimeout(eggNoteTimer);
+    eggNoteTimer = setTimeout(() => setNote(''), 3500);
+    updateEggLine();
+}
+
+function updateEggLine() {
+    elEggs.hidden = !botsMode();
+    elEggs.textContent = foundEggs.size >= EGGS.length
+        ? `all ${EGGS.length} easter eggs found · thanks for looking around`
+        : `easter eggs found · ${foundEggs.size} / ${EGGS.length} · hidden on every map, shoot one to find it`;
+}
+
+// A found egg spins once and bobs, then settles back.
+function spinEggs(now) {
+    for (const g of eggMeshes) {
+        if (!g.userData.spinStart) continue;
+        const t = (now - g.userData.spinStart) / 1000;
+        if (t > 1.2) {
+            g.userData.spinStart = 0;
+            g.rotation.y = g.userData.baseTurn;
+            g.position.y = g.userData.baseY;
+            continue;
+        }
+        g.rotation.y = g.userData.baseTurn + easeInOut(t / 1.2) * Math.PI * 2;
+        g.position.y = g.userData.baseY + Math.sin((t / 1.2) * Math.PI) * 1.2;
+    }
+}
+
 function headshotRate() {
     return kills ? Math.round((bots.stats.headshots / kills) * 100) : 0;
 }
@@ -3674,6 +4210,7 @@ function loop(now) {
     updateBursts(now);
     if (envUpdate) envUpdate(now, dt);
     if (running && botsMode()) bots.update(now, dt, { keys, yaw });
+    spinEggs(now);
     // The sky stays centred on the viewer, so walking to the edge of a big map
     // never reaches it.
     if (skyMesh) skyMesh.position.copy(camera.position);
@@ -4194,6 +4731,11 @@ buildChips(elCrosshairs, CROSSHAIRS, xhStyle, (id) => {
 buildSwatches();
 applyCrosshair();
 reloadsOn = recall(RELOAD_KEY) !== 'off';
+try {
+    foundEggs = new Set(JSON.parse(recall(EGGS_KEY) || '[]'));
+} catch {
+    foundEggs = new Set();
+}
 akAuto = recall(AK_MODE_KEY) !== 'semi';
 buildChips(elReloads, RELOAD_MODES, reloadsOn ? 'on' : 'off', (id) => {
     reloadsOn = id === 'on';
@@ -4255,6 +4797,7 @@ bots.setBounds(mapBounds || mapKind.bounds);
 // get the aim trainer.
 function applyMode() {
     elTitle.textContent = botsMode() ? 'bots' : 'aim trainer';
+    updateEggLine();
     // Bots mode plays on the wider build of the map.
     if (builtWide !== botsMode()) selectMap(mapKind.id);
     elBotRow.hidden = !botsMode();

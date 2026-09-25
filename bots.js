@@ -82,14 +82,20 @@ export function createBots(ctx) {
         envRoot.updateMatrixWorld(true);
         const box = new THREE.Box3();
         envRoot.traverse((o) => {
-            if (!o.isMesh) return;
+            if (!o.isMesh || o.userData.noCollide) return;
             box.setFromObject(o);
             const h = box.max.y - box.min.y;
             const w = box.max.x - box.min.x;
             const d = box.max.z - box.min.z;
-            if (h < 1 || w > 110 || d > 110) return;
-            if (box.min.y > floorY + 5 || box.max.y < floorY + 1.2) return;
-            colliders.push({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z, top: box.max.y });
+            // Raised floors, roofs and landings are flagged walkable: they count
+            // however high they are, and however thin.
+            const walkable = o.userData.walkable;
+            if (!walkable && (h < 1 || w > 110 || d > 110)) return;
+            if (!walkable && (box.min.y > floorY + 5 || box.max.y < floorY + 1.2)) return;
+            colliders.push({
+                minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z,
+                minY: box.min.y, top: box.max.y,
+            });
             colliderMeshes.push(o);
         });
     }
@@ -99,6 +105,8 @@ export function createBots(ctx) {
     function collide(pos, vel, radius, feet) {
         let ground = floorY;
         for (const c of colliders) {
+            // Entirely over your head (a roof, a landing above): walk under it.
+            if (c.minY > feet + EYE + 0.6) continue;
             const cx = clamp(pos.x, c.minX, c.maxX);
             const cz = clamp(pos.z, c.minZ, c.maxZ);
             let dx = pos.x - cx;
@@ -140,7 +148,7 @@ export function createBots(ctx) {
 
     function blockedAt(x, z, radius) {
         if (x < bounds[0] + radius || x > bounds[1] - radius || z < bounds[2] + radius || z > bounds[3] - radius) return true;
-        return colliders.some((c) => c.top > floorY + STEP
+        return colliders.some((c) => c.top > floorY + STEP && c.minY < floorY + EYE
             && x + radius > c.minX && x - radius < c.maxX && z + radius > c.minZ && z - radius < c.maxZ);
     }
 
@@ -667,7 +675,9 @@ export function createBots(ctx) {
             holeDecal(wall.point, n, rand(0.8, 1.2));
             spray(wall.point, n, 5, 5, dustMat, 1, 0.4);
         }
-        return { hit: false };
+        // How far the shot got, so aim.js can tell if anything else it aimed
+        // at (an easter egg) was in front of the wall.
+        return { hit: false, wallDist: wall ? wall.distance : Infinity };
     }
 
     /* ---------- the bots' side of the fight ---------- */

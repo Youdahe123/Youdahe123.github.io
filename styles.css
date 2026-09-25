@@ -5322,6 +5322,16 @@ h1.post-full-title::before {
     background: var(--ink-fg);
 }
 
+.aim-eggs {
+    margin: -1.2rem 0 1.6rem;
+    font-size: 13px;
+    color: var(--ink-muted);
+}
+
+.aim-eggs[hidden] {
+    display: none;
+}
+
 .aim-bot-options {
     display: flex;
     flex-wrap: wrap;
