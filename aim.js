@@ -84,6 +84,7 @@ const elAmmoFill = document.getElementById('aimAmmoFill');
 const elAmmoReserve = document.getElementById('aimAmmoReserve');
 const elReloads = document.getElementById('aimReloads');
 const elSound = document.getElementById('aimSound');
+const elFullscreen = document.getElementById('aimFullscreen');
 const elSensRange = document.getElementById('aimSensRange');
 const elSensValue = document.getElementById('aimSensValue');
 
@@ -3535,6 +3536,35 @@ function setSensitivity(value, source) {
 }
 elSensRange.addEventListener('input', () => setSensitivity(elSensRange.value, elSensRange));
 elSensValue.addEventListener('change', () => setSensitivity(elSensValue.value));
+
+// Fullscreen takes the whole page, so the menu and the ammo counter come with
+// it. Safari still wants its prefixed calls, and iPhone Safari has none at
+// all, so the button only shows where the browser can actually do it.
+const fullscreenElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+const canFullscreen = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+
+function toggleFullscreen() {
+    const root = document.documentElement;
+    if (fullscreenElement()) {
+        (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+        const request = (root.requestFullscreen || root.webkitRequestFullscreen).call(root);
+        // If the browser says no, point at the key that always works.
+        const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+        if (request && typeof request.catch === 'function') {
+            request.catch(() => setNote(`fullscreen was blocked, try ${mac ? 'ctrl + cmd + f' : 'f11'}`));
+        }
+    }
+}
+
+function syncFullscreen() {
+    elFullscreen.textContent = fullscreenElement() ? 'exit fullscreen' : 'fullscreen';
+}
+
+elFullscreen.hidden = !canFullscreen;
+elFullscreen.addEventListener('click', toggleFullscreen);
+document.addEventListener('fullscreenchange', syncFullscreen);
+document.addEventListener('webkitfullscreenchange', syncFullscreen);
 
 elSound.addEventListener('click', () => {
     soundOn = !soundOn;

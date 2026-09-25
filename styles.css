@@ -5693,6 +5693,7 @@ h1.aim-title {
 
 .aim-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.6rem;
     margin-bottom: 1.5rem;
 }
