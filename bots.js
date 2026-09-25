@@ -157,7 +157,7 @@ export function createBots(ctx) {
                 bestScore = score;
                 best = new THREE.Vector3(x, floorY, z);
             }
-            if (score > 35) break;
+            if (score > 55) break;
         }
         return best || new THREE.Vector3(0, floorY, 0);
     }
@@ -699,10 +699,13 @@ export function createBots(ctx) {
         }
     }
 
-    function newWaypoint(bot) {
+    // Somewhere to walk to. Half the time it is roughly where you are, so on a
+    // big map the bots come looking instead of wandering the far corners.
+    function newWaypoint() {
+        const hunt = player.alive && Math.random() < 0.5;
         for (let i = 0; i < 20; i++) {
-            const x = rand(bounds[0] + 3, bounds[1] - 3);
-            const z = rand(bounds[2] + 3, bounds[3] - 3);
+            const x = hunt ? camera.position.x + rand(-25, 25) : rand(bounds[0] + 3, bounds[1] - 3);
+            const z = hunt ? camera.position.z + rand(-25, 25) : rand(bounds[2] + 3, bounds[3] - 3);
             if (!blockedAt(x, z, 1.6)) return new THREE.Vector3(x, floorY, z);
         }
         return new THREE.Vector3(0, floorY, 0);

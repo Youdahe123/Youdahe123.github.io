@@ -202,7 +202,7 @@ function buildScene() {
 
     scene = new THREE.Scene();
 
-    camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.1, 240);
+    camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.1, 420);
     camera.position.set(0, 0, 0);
 
     // Everything that is not a target (sky, ground, props, lights) belongs to
@@ -224,6 +224,10 @@ const BASE_FOV = 68;
 const FLOOR_Y = -ROOM.h / 2;
 let envRoot;
 let envUpdate = null;
+let skyMesh = null;
+// Whether the map in the scene is the bots-mode build, and its walkable edges.
+let builtWide = false;
+let mapBounds = null;
 
 // A texture painted once on a canvas. Every map surface is procedural, so the
 // page ships no image assets for any of this.
@@ -287,10 +291,16 @@ function skyDome(root, top, horizon, bottom, exponent = 0.6) {
     });
     const dome = new THREE.Mesh(new THREE.SphereGeometry(200, 32, 16), material);
     dome.renderOrder = -1;
+    // Drawn first and never written to depth, so it sits behind everything
+    // whatever its size; it follows the camera (see loop) so it never ends.
+    dome.frustumCulled = false;
     root.add(dome);
+    skyMesh = dome;
 }
 
-function ground(root, material, size = 480) {
+function ground(root, material, size = 900) {
+    // Texture repeats were set for a 480-unit ground; keep the same tile size.
+    if (material.map) material.map.repeat.multiplyScalar(size / 480);
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(size, size), material);
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = FLOOR_Y;
@@ -309,23 +319,48 @@ function light(root, type, color, intensity, position) {
 
 // The original: a dark wireframe room. Flat, low light, so the targets carry
 // all the contrast.
-function buildRange(root) {
+function buildRange(root, opts = {}) {
     light(root, 'ambient', 0xf0e9dd, 1.35);
     light(root, 'dir', 0xf0e9dd, 1.1, [4, 8, 6]);
     light(root, 'point', 0xf0e9dd, 10, [0, -3, -8]);
 
-    const box = new THREE.BoxGeometry(ROOM.w, ROOM.h, ROOM.d);
+    // Bots mode gets a hall four times the size, full of cover blocks.
+    const size = opts.wide ? 160 : ROOM.w;
+    const box = new THREE.BoxGeometry(size, ROOM.h, size);
     root.add(new THREE.LineSegments(
         new THREE.EdgesGeometry(box),
         new THREE.LineBasicMaterial({ color: INK, transparent: true, opacity: 0.18 })
     ));
     root.add(new THREE.Mesh(box, new THREE.MeshBasicMaterial({ color: 0x191a19, side: THREE.BackSide })));
 
-    const grid = new THREE.GridHelper(ROOM.w, 38, 0xa67d43, INK);
+    const grid = new THREE.GridHelper(size, size, 0xa67d43, INK);
     grid.position.y = FLOOR_Y + 0.01;
     grid.material.transparent = true;
     grid.material.opacity = 0.12;
     root.add(grid);
+
+    if (!opts.wide) return undefined;
+    // A bigger hall needs more light and a longer fog to see across it.
+    light(root, 'ambient', 0xf0e9dd, 0.6);
+    light(root, 'dir', 0xf0e9dd, 0.8, [-30, 40, -20]);
+    const face = new THREE.MeshStandardMaterial({ color: 0x3d403d, roughness: 0.9 });
+    const edge = new THREE.LineBasicMaterial({ color: INK, transparent: true, opacity: 0.45 });
+    const cover = (x, z, w, d, h) => {
+        const mesh = block(root, face, [w, h, d], [x, 0, z]);
+        const lines = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), edge);
+        mesh.add(lines);
+    };
+    outskirts(root, {
+        seed: 11,
+        inner: [-12, 12, -12, 12],
+        outer: [-78, 78, -78, 78],
+        cell: 18,
+        density: 0.7,
+        heights: [3, 9],
+        building: (x, z, w, d, h) => cover(x, z, w * 0.7, d * 0.7, h),
+        prop: (x, z, rng) => cover(x, z, 2 + rng() * 2, 2 + rng() * 2, 3),
+    });
+    return { bounds: [-78, 78, -78, 78], fog: [0x121312, 45, 175] };
 }
 
 // Sandstone blocks with mortar lines, for the desert walls.
@@ -418,6 +453,64 @@ function gableRoof(root, material, w, d, h, x, z, pitch = 0.5, turn = 0) {
     group.position.set(x, FLOOR_Y + h, z);
     group.rotation.y = turn;
     root.add(group);
+}
+
+/* ----- bots mode: the wider maps -----
+
+   In bots mode each map grows well past its original courtyard. The original
+   stays as the centre, and the ring round it is filled with that map's own
+   kind of building, laid out on a loose grid so there are streets between
+   them, with a few lanes kept clear so the centre opens out onto the rest. A
+   seeded random keeps the layout the same every visit. */
+
+const WIDE_BOUNDS = [-95, 95, -110, 85];
+
+function seeded(seed) {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+const overlaps = (a, b) => a[0] < b[1] && a[1] > b[0] && a[2] < b[3] && a[3] > b[2];
+
+function outskirts(root, cfg) {
+    const rng = seeded(cfg.seed);
+    const range = (lo, hi) => lo + rng() * (hi - lo);
+    const outer = cfg.outer || WIDE_BOUNDS;
+    const cell = cfg.cell || 22;
+    const keep = [cfg.inner.map((v, i) => v + (i % 2 ? 5 : -5)), ...(cfg.keepClear || [])];
+    for (let cx = outer[0] + cell / 2; cx < outer[1]; cx += cell) {
+        for (let cz = outer[2] + cell / 2; cz < outer[3]; cz += cell) {
+            const rect = [cx - cell / 2, cx + cell / 2, cz - cell / 2, cz + cell / 2];
+            if (keep.some((k) => overlaps(rect, k))) continue;
+            const roll = rng();
+            if (roll < (cfg.density ?? 0.72)) {
+                const w = range(8, cell - 8);
+                const d = range(8, cell - 8);
+                const x = cx + range(-1, 1) * (cell - w - 8) / 2;
+                const z = cz + range(-1, 1) * (cell - d - 8) / 2;
+                cfg.building(x, z, w, d, range(cfg.heights?.[0] ?? 8, cfg.heights?.[1] ?? 16), rng);
+            } else if (roll < 0.93 && cfg.prop) {
+                cfg.prop(cx + range(-5, 5), cz + range(-5, 5), rng);
+            }
+        }
+    }
+    // A low wall round the edge: too high to jump, low enough to see over.
+    if (cfg.wall) {
+        const [x0, x1, z0, z1] = outer;
+        const h = cfg.wallHeight || 7;
+        const w = x1 - x0;
+        const d = z1 - z0;
+        block(root, cfg.wall(w, h), [w + 2, h, 2], [(x0 + x1) / 2, 0, z0 - 1]);
+        block(root, cfg.wall(w, h), [w + 2, h, 2], [(x0 + x1) / 2, 0, z1 + 1]);
+        block(root, cfg.wall(d, h), [2, h, d], [x0 - 1, 0, (z0 + z1) / 2]);
+        block(root, cfg.wall(d, h), [2, h, d], [x1 + 1, 0, (z0 + z1) / 2]);
+    }
 }
 
 /* ----- textures ----- */
@@ -684,7 +777,7 @@ function sunAndSky(root, top, horizon, bottom, sunColor, sunPos, sky = 0xcfe3f5,
 
 // The courtyard at the end of Long A: sandstone walls, the double doors hung
 // open in the arch, the blue container, crates, and the spray-painted A.
-function buildDust2(root) {
+function buildDust2(root, opts = {}) {
     sunAndSky(root, 0x4f8cc9, 0xf1d9a6, 0xd9b77e, 0xfff0d6, [-20, 30, 10]);
 
     ground(root, new THREE.MeshStandardMaterial({
@@ -697,13 +790,24 @@ function buildDust2(root) {
     block(root, surface(stone, 7, 3), [34, 16, 2], [-17, 0, -36]);
     block(root, surface(stone, 5, 3), [24, 16, 2], [22, 0, -36]);
     block(root, surface(stone, 2, 1), [10, 5, 2], [5, 11, -36]);
-    block(root, surface(stone, 14, 3), [2, 16, 72], [-34, 0, -2]);
-    block(root, surface(stone, 14, 3), [2, 16, 72], [34, 0, -2]);
-    block(root, surface(stone, 14, 3), [70, 16, 2], [0, 0, 32]);
     const trim = plain(0xb38e57);
     block(root, trim, [70, 1, 3], [0, 16, -35]);
-    block(root, trim, [3, 1, 72], [-33, 16, -2]);
-    block(root, trim, [3, 1, 72], [33, 16, -2]);
+    if (!opts.wide) {
+        block(root, surface(stone, 14, 3), [2, 16, 72], [-34, 0, -2]);
+        block(root, surface(stone, 14, 3), [2, 16, 72], [34, 0, -2]);
+        block(root, surface(stone, 14, 3), [70, 16, 2], [0, 0, 32]);
+        block(root, trim, [3, 1, 72], [-33, 16, -2]);
+        block(root, trim, [3, 1, 72], [33, 16, -2]);
+    } else {
+        // The same walls with gaps through them, out to the rest of the map.
+        for (const [x, z, w, d] of [
+            [-34, -26, 2, 24], [-34, 18, 2, 32], [34, -30, 2, 16], [34, 13, 2, 42],
+            [-21.5, 32, 27, 2], [21.5, 32, 27, 2],
+        ]) {
+            block(root, surface(stone, Math.max(w, d) / 5, 3), [w, 16, d], [x, 0, z]);
+            block(root, trim, [w + 1, 1, d + 1], [x, 16, z]);
+        }
+    }
 
     // Long doors: two heavy wooden double doors swung open in the arch.
     const door = surface(paint(128, planks('#5b3a22', '#2e1d10')), 2, 1);
@@ -729,14 +833,41 @@ function buildDust2(root) {
     decal(root, sprayed('A', '#b8321f'), 7, 22, 6.5, -34.9);
     decal(root, sprayed('←', '#1f1f1f'), 3, -14, 4, -34.9);
 
-    return { fog: [0xf1d9a6, 45, 140], halo: 0x3a2a18 };
+    if (!opts.wide) return { fog: [0xf1d9a6, 45, 140], halo: 0x3a2a18 };
+    let bMarked = false;
+    outskirts(root, {
+        seed: 2,
+        inner: [-36, 36, -38, 34],
+        // Long past the arch, and a lane out of every gap in the walls.
+        keepClear: [[-6, 16, -115, -36], [-100, -34, -18, 6], [34, 100, -26, -4], [-12, 12, 32, 90]],
+        building: (x, z, w, d, h) => {
+            block(root, surface(stone, w / 5, h / 5), [w, h, d], [x, 0, z]);
+            block(root, trim, [w + 0.8, 0.8, d + 0.8], [x, h, z]);
+            // The B site marker goes on the first building out to the left.
+            if (!bMarked && x < -40 && Math.abs(z) < 40) {
+                bMarked = true;
+                decal(root, sprayed('B', '#b8321f'), 6, x, h * 0.5, z + d / 2 + 0.06);
+            }
+        },
+        prop: (x, z, rng) => {
+            if (rng() < 0.3) {
+                block(root, container, [4, 4.2, 9], [x, 0, z], rng() * Math.PI);
+                return;
+            }
+            const n = 1 + Math.floor(rng() * 3);
+            for (let i = 0; i < n; i++) block(root, crate, [3, 3, 3], [x + i * 3.1, 0, z + (i % 2) * 0.6], rng() * 0.4);
+            if (n > 1 && rng() < 0.5) block(root, crate, [3, 3, 3], [x + 1.5, 3, z + 0.3], rng() * 0.4);
+        },
+        wall: (w, h) => surface(stone, w / 5, h / 5),
+    });
+    return { fog: [0xf1d9a6, 60, 190], halo: 0x3a2a18, bounds: WIDE_BOUNDS };
 }
 
 /* ----- mirage ----- */
 
 // A Moroccan square: warm plaster, the palace front with its arches and blue
 // shutters, a tiled dome, a market awning, carpets hung out to air, palms.
-function buildMirage(root) {
+function buildMirage(root, opts = {}) {
     sunAndSky(root, 0x3e7fc4, 0xf6e3c0, 0xe0c291, 0xfff1d8, [25, 32, -5]);
 
     ground(root, surface(paint(256, pavers('#d7b88a', '#a88a5e', 4)), 60, 60, { roughness: 1 }));
@@ -800,7 +931,48 @@ function buildMirage(root) {
     palm(root, 22, -22, 12);
     palm(root, 26, 18, 10);
 
-    return { fog: [0xf6e3c0, 50, 150], halo: 0x3a2a18 };
+    if (!opts.wide) return { fog: [0xf6e3c0, 50, 150], halo: 0x3a2a18 };
+    const tiles = paint(256, zellige);
+    outskirts(root, {
+        seed: 3,
+        inner: [-42, 42, -46, 30],
+        keepClear: [[-10, 10, -115, 90], [-100, 100, -6, 10]],
+        building: (x, z, w, d, h, rng) => {
+            block(root, surface(plaster, w / 6, h / 6), [w, h, d], [x, 0, z]);
+            block(root, plain(0xc4a171), [w + 0.8, 0.8, d + 0.8], [x, h, z]);
+            // Shuttered windows on the two long faces.
+            for (const side of [-1, 1]) {
+                for (let i = 0; i < Math.floor(w / 6); i++) {
+                    const wx = x - w / 2 + 3 + i * 6;
+                    const wz = z + side * (d / 2 + 0.06);
+                    block(root, dark, [1.8, 2.4, 0.1], [wx, h * 0.55, wz]);
+                    block(root, shutter, [0.9, 2.4, 0.2], [wx - 1.4, h * 0.55, wz]);
+                    block(root, shutter, [0.9, 2.4, 0.2], [wx + 1.4, h * 0.55, wz]);
+                }
+            }
+            if (rng() < 0.3) {
+                const r = Math.min(w, d) * 0.35;
+                const cap = new THREE.Mesh(
+                    new THREE.SphereGeometry(r, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+                    surface(tiles, 3, 1.5, { roughness: 0.4, metalness: 0.1 })
+                );
+                cap.position.set(x, FLOOR_Y + h, z);
+                root.add(cap);
+            }
+        },
+        prop: (x, z, rng) => {
+            if (rng() < 0.4) {
+                palm(root, x, z, 9 + rng() * 4);
+                return;
+            }
+            block(root, plain(0x7a5332), [4, 2.4, 3], [x, 0, z], rng() * Math.PI);
+            const hang = new THREE.Mesh(new THREE.PlaneGeometry(3, 3.6), rug);
+            hang.position.set(x, FLOOR_Y + 4.2, z + 1.6);
+            root.add(hang);
+        },
+        wall: (w, h) => surface(plaster, w / 6, h / 6),
+    });
+    return { fog: [0xf6e3c0, 60, 190], halo: 0x3a2a18, bounds: WIDE_BOUNDS };
 }
 
 /* ----- inferno ----- */
@@ -808,7 +980,7 @@ function buildMirage(root) {
 // An Italian hill town: stucco houses under terracotta roofs, green shutters,
 // the church's bell tower over everything, washing strung across the street,
 // cobbles underfoot and cypress trees on green hills beyond.
-function buildInferno(root) {
+function buildInferno(root, opts = {}) {
     sunAndSky(root, 0x6a9fd0, 0xf4dcae, 0x8fa36a, 0xffe2b0, [-30, 22, 12], 0xdbe7f2, 0x8a7a55);
 
     ground(root, surface(paint(256, cobbles), 50, 50, { roughness: 1 }));
@@ -902,7 +1074,35 @@ function buildInferno(root) {
         root.add(c);
     }
 
-    return { fog: [0xf4dcae, 55, 170], halo: 0x3a2a18 };
+    if (!opts.wide) return { fog: [0xf4dcae, 55, 170], halo: 0x3a2a18 };
+    const walls = ['#e2c28f', '#e8d3b0', '#d9a877', '#e5c9a0', '#d8b184', '#ead9bd'];
+    outskirts(root, {
+        seed: 4,
+        inner: [-42, 42, -56, 28],
+        // A banana-style lane running out the side, and the main street.
+        keepClear: [[-10, 10, -115, -56], [-100, -42, 8, 24], [42, 100, -20, -6]],
+        heights: [9, 14],
+        building: (x, z, w, d, h, rng) => {
+            house(x, z, w, h, d, walls[Math.floor(rng() * walls.length)], Math.floor(rng() * 4) * (Math.PI / 2));
+        },
+        prop: (x, z, rng) => {
+            if (rng() < 0.5) {
+                const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 2.2, 14), plain(0x6f4a2a));
+                barrel.position.set(x, FLOOR_Y + 1.1, z);
+                root.add(barrel);
+                return;
+            }
+            block(root, plain(0x7a5332), [2.4, 0.8, 1], [x, 0, z]);
+            for (let i = 0; i < 3; i++) {
+                const bloom = new THREE.Mesh(UNIT_BALL, plain(i % 2 ? 0xc93a3a : 0x4f8a3a));
+                bloom.scale.setScalar(0.45);
+                bloom.position.set(x - 0.7 + i * 0.7, FLOOR_Y + 1.1, z);
+                root.add(bloom);
+            }
+        },
+        wall: (w, h) => surface(paint(128, speckle('#cbb28a', ['#a88f68', '#e0cda8'], 900)), w / 6, h / 6),
+    });
+    return { fog: [0xf4dcae, 65, 200], halo: 0x3a2a18, bounds: WIDE_BOUNDS };
 }
 
 /* ----- nuke ----- */
@@ -910,7 +1110,7 @@ function buildInferno(root) {
 // The plant: the reactor's containment dome, a blue corrugated warehouse with
 // the radiation sign, hazard stripes, stacked shipping containers, pipework
 // and painted yard lines, under a flat pale sky.
-function buildNuke(root) {
+function buildNuke(root, opts = {}) {
     sunAndSky(root, 0x8fb0cc, 0xd8e0e6, 0xa7adb0, 0xffffff, [15, 30, 20], 0xe4ecf2, 0x8a8f94);
 
     ground(root, surface(paint(256, speckle('#9fa3a3', ['#868a8b', '#b5b9b9', '#7a7e7f'], 2400)), 40, 40, { roughness: 1 }));
@@ -968,14 +1168,46 @@ function buildNuke(root) {
         block(root, plain(0xf2f0e6, { emissive: 0xffffff, emissiveIntensity: 0.6 }), [2.4, 1, 1], [x, 17.5, -29.6]);
     }
 
-    return { fog: [0xd8e0e6, 50, 170], halo: 0x2a2f33 };
+    if (!opts.wide) return { fog: [0xd8e0e6, 50, 170], halo: 0x2a2f33 };
+    const sidings = [corrugated('#4f7fae', '#2f587f'), corrugated('#8a8f93', '#5f6468'), corrugated('#c9ccce', '#9ea3a6')];
+    const boxes = [['#c8642d', '#8f3f18'], ['#3f7a4a', '#2a5332'], ['#9b2f2f', '#6b1f1f'], ['#4f86c2', '#2f5a8c']];
+    outskirts(root, {
+        seed: 5,
+        inner: [-44, 46, -80, 30],
+        keepClear: [[-8, 8, 30, 90], [-100, -44, -12, 4], [46, 100, -30, -14]],
+        heights: [10, 18],
+        building: (x, z, w, d, h, rng) => {
+            const skin = paint(128, sidings[Math.floor(rng() * sidings.length)]);
+            block(root, surface(skin, w / 4, h / 8), [w, h, d], [x, 0, z]);
+            block(root, plain(0x5f6468), [w + 0.6, 0.8, d + 0.6], [x, h, z]);
+            block(root, surface(stripes, w / 4, 1), [w + 0.2, 1.2, d + 0.2], [x, 0, z]);
+        },
+        prop: (x, z, rng) => {
+            const c = boxes[Math.floor(rng() * boxes.length)];
+            const turn = rng() < 0.5 ? 0 : Math.PI / 2;
+            block(root, box(c), [5, 5, 12], [x, 0, z], turn);
+            // A second one stacked square on top, never hanging off the edge.
+            if (rng() < 0.4) {
+                const c2 = boxes[Math.floor(rng() * boxes.length)];
+                block(root, box(c2), [5, 5, 12], [x, 5, z], turn + (rng() - 0.5) * 0.08);
+            }
+        },
+        wall: (w, h) => surface(concrete, w / 6, h / 6),
+    });
+    return { fog: [0xd8e0e6, 60, 200], halo: 0x2a2f33, bounds: WIDE_BOUNDS };
 }
 
 /* ----- vertigo ----- */
 
 // The top of a tower under construction: a bare concrete floor with nothing
 // round its edge but rails, scaffold and a crane, and the city a long way down.
-function buildVertigo(root) {
+function buildVertigo(root, opts = {}) {
+    // Bots mode stands on a much bigger floor of the tower.
+    const deck = opts.wide ? { x0: -60, x1: 60, z0: -85, z1: 40 } : { x0: -30, x1: 30, z0: -45, z1: 25 };
+    const deckW = deck.x1 - deck.x0;
+    const deckD = deck.z1 - deck.z0;
+    const deckX = (deck.x0 + deck.x1) / 2;
+    const deckZ = (deck.z0 + deck.z1) / 2;
     skyDome(root, 0x3f7fc6, 0xc9dcec, 0x9fb4c6, 0.5);
     root.add(new THREE.HemisphereLight(0xdcebf7, 0x6f7f8c, 1.5));
     light(root, 'dir', 0xfff4e0, 2.3, [-25, 30, 15]);
@@ -983,8 +1215,8 @@ function buildVertigo(root) {
 
     // The slab, and the storey below it, in bare concrete.
     const slab = paint(256, speckle('#a9a9a4', ['#8f8f8a', '#c2c2bd', '#7c7c77'], 2400));
-    block(root, surface(slab, 10, 10, { roughness: 1 }), [60, 1, 70], [0, -1, -10]);
-    block(root, surface(slab, 10, 2), [58, 6, 68], [0, -7, -10]);
+    block(root, surface(slab, deckW / 6, deckD / 6, { roughness: 1 }), [deckW, 1, deckD], [deckX, -1, deckZ]);
+    block(root, surface(slab, deckW / 6, 2), [deckW - 2, 6, deckD - 2], [deckX, -7, deckZ]);
     const column = surface(slab, 1, 3);
     // Columns along the back, and only at the sides further forward, so the
     // middle of the view stays open.
@@ -998,12 +1230,12 @@ function buildVertigo(root) {
 
     // Safety rail round the edge, striped.
     const rail = surface(paint(128, hazard), 8, 1);
-    for (const [w, d, x, z] of [[60, 0.3, 0, -45], [0.3, 70, -30, -10], [0.3, 70, 30, -10]]) {
+    for (const [w, d, x, z] of [[deckW, 0.3, deckX, deck.z0], [0.3, deckD, deck.x0, deckZ], [0.3, deckD, deck.x1, deckZ]]) {
         block(root, rail, [w, 0.4, d], [x, 3.2, z]);
         block(root, rail, [w, 0.3, d], [x, 1.6, z]);
     }
     const post = plain(0xe8b923);
-    for (let x = -30; x <= 30; x += 6) block(root, post, [0.25, 3.6, 0.25], [x, 0, -45]);
+    for (let x = deck.x0; x <= deck.x1; x += 6) block(root, post, [0.25, 3.6, 0.25], [x, 0, deck.z0]);
 
     // Scaffold tower on the right: a lattice of orange tube.
     const tubeMat = plain(0xd9731f, { metalness: 0.4, roughness: 0.6 });
@@ -1042,7 +1274,8 @@ function buildVertigo(root) {
     const cityMats = skins.map((t) => surface(t, 2, 4, { roughness: 0.6 }));
     for (let i = 0; i < 70; i++) {
         const a = (i / 70) * Math.PI * 2 + Math.sin(i) * 0.2;
-        const r = 55 + ((i * 53) % 110);
+        // Out past the edge of the deck, so no tower comes up through it.
+        const r = (opts.wide ? 95 : 55) + ((i * 53) % 110);
         const w = 10 + (i % 4) * 4;
         const top = -30 - ((i * 31) % 70) + (i % 5 === 0 ? 62 : 0);
         const h = 140 + top;
@@ -1051,7 +1284,28 @@ function buildVertigo(root) {
         root.add(mesh);
     }
 
-    return { fog: [0xc9dcec, 70, 220], halo: 0x1f2a33 };
+    if (!opts.wide) return { fog: [0xc9dcec, 70, 220], halo: 0x1f2a33 };
+    // More of the unfinished floor: column stubs, cover walls, pallets, tarps.
+    outskirts(root, {
+        seed: 6,
+        inner: [-30, 30, -45, 25],
+        outer: [deck.x0 + 2, deck.x1 - 2, deck.z0 + 2, deck.z1 - 2],
+        cell: 20,
+        density: 0.5,
+        heights: [3, 6],
+        building: (x, z, w, d, h, rng) => {
+            if (rng() < 0.5) {
+                block(root, column, [1.6, 12, 1.6], [x, 0, z]);
+                for (let i = 0; i < 4; i++) block(root, rebar, [0.12, 2, 0.12], [x - 0.4 + (i % 2) * 0.8, 12, z - 0.4 + Math.floor(i / 2) * 0.8]);
+            } else {
+                block(root, surface(slab, w / 6, 1), [w * 0.8, h, 1.2], [x, 0, z], rng() < 0.5 ? 0 : Math.PI / 2);
+            }
+        },
+        prop: (x, z, rng) => {
+            block(root, plain(rng() < 0.5 ? 0x2f5f9a : 0x8a6a44), [3 + rng() * 2, 1.2 + rng() * 1.5, 3], [x, 0, z], rng());
+        },
+    });
+    return { fog: [0xc9dcec, 80, 230], halo: 0x1f2a33, bounds: [deck.x0 + 1, deck.x1 - 1, deck.z0 + 1, deck.z1 - 1] };
 }
 
 /* ----- ancient ----- */
@@ -1059,7 +1313,7 @@ function buildVertigo(root) {
 // A temple in the rainforest: a stepped pyramid with its stair and shrine,
 // the orange of A site and the pale-blue water of B, carved pillars, and
 // jungle closing in all round.
-function buildAncient(root) {
+function buildAncient(root, opts = {}) {
     sunAndSky(root, 0x8fb8c9, 0xdfe6d4, 0x5d6f45, 0xfff1d0, [20, 28, 10], 0xdce8e0, 0x4f6a35);
 
     ground(root, new THREE.MeshStandardMaterial({
@@ -1135,7 +1389,27 @@ function buildAncient(root) {
         root.add(leaf);
     }
 
-    return { fog: [0xdfe6d4, 40, 150], halo: 0x2a2f1c };
+    if (!opts.wide) return { fog: [0xdfe6d4, 40, 150], halo: 0x2a2f1c };
+    // Ruins scattered through the jungle: broken walls, carved blocks, pillars,
+    // and more trees between them.
+    outskirts(root, {
+        seed: 7,
+        inner: [-36, 36, -90, 26],
+        keepClear: [[-8, 8, 26, 90], [-100, -36, -30, -16], [36, 100, -30, -16]],
+        density: 0.5,
+        heights: [3, 8],
+        building: (x, z, w, d, h, rng) => {
+            block(root, surface(carved, w / 6, h / 4), [w, h, d * 0.4], [x, 0, z], rng() < 0.5 ? 0 : Math.PI / 2);
+            block(root, surface(carved, w / 12, 1), [w * 0.45, h * 0.5, d * 0.4], [x - w * 0.2, h, z], rng() < 0.5 ? 0 : Math.PI / 2);
+            if (rng() < 0.4) block(root, plain(0xd9731f), [w * 0.3, 0.4, d * 0.42], [x + w * 0.2, h, z]);
+        },
+        prop: (x, z, rng) => {
+            if (rng() < 0.6) tree(root, x, z, 13 + rng() * 8, leaves);
+            else block(root, surface(carved, 1, 2), [2.2, 3 + rng() * 5, 2.2], [x, 0, z], rng());
+        },
+        wall: (w, h) => surface(carved, w / 6, h / 4),
+    });
+    return { fog: [0xdfe6d4, 50, 180], halo: 0x2a2f1c, bounds: WIDE_BOUNDS };
 }
 
 const MAPS = [
@@ -1166,15 +1440,18 @@ function selectMap(id) {
         }
     });
     envRoot.clear();
+    skyMesh = null;
 
-    const made = mapKind.build(envRoot) || {};
+    builtWide = botsMode();
+    const made = mapKind.build(envRoot, { wide: builtWide }) || {};
+    mapBounds = made.bounds || mapKind.bounds;
     const settings = { ...(mapKind.defaults || {}), ...made };
     scene.background = settings.background !== undefined ? new THREE.Color(settings.background) : null;
     scene.fog = settings.fog ? new THREE.Fog(settings.fog[0], settings.fog[1], settings.fog[2]) : null;
     HALO_MATERIAL.color.set(settings.halo ?? INK);
     envUpdate = settings.update || null;
     // In bots mode this is the ground you walk: where the edges are.
-    if (bots) bots.setBounds(mapKind.bounds);
+    if (bots) bots.setBounds(mapBounds);
 }
 
 /* ---------- the beaver ---------- */
@@ -3299,6 +3576,9 @@ function loop(now) {
     updateBursts(now);
     if (envUpdate) envUpdate(now, dt);
     if (running && botsMode()) bots.update(now, dt, { keys, yaw });
+    // The sky stays centred on the viewer, so walking to the edge of a big map
+    // never reaches it.
+    if (skyMesh) skyMesh.position.copy(camera.position);
     updateGun(now, dt);
 
     if (running) tickAmmo(now);
@@ -3867,12 +4147,14 @@ bots = createBots({
         showGun(true);
     },
 });
-bots.setBounds(mapKind.bounds);
+bots.setBounds(mapBounds || mapKind.bounds);
 
 // Mode, difficulty and bot count. Bots mode needs a keyboard, so phones only
 // get the aim trainer.
 function applyMode() {
     elTitle.textContent = botsMode() ? 'bots' : 'aim trainer';
+    // Bots mode plays on the wider build of the map.
+    if (builtWide !== botsMode()) selectMap(mapKind.id);
     elBotRow.hidden = !botsMode();
     elTargetRow.hidden = botsMode();
     showModeStats();
