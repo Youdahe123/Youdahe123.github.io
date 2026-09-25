@@ -473,7 +473,7 @@ function gableRoof(root, material, w, d, h, x, z, pitch = 0.5, turn = 0) {
    them, with a few lanes kept clear so the centre opens out onto the rest. A
    seeded random keeps the layout the same every visit. */
 
-const WIDE_BOUNDS = [-95, 95, -110, 85];
+const WIDE_BOUNDS = [-115, 115, -130, 105];
 // Where the gallery stands on most maps, door facing the middle.
 const GALLERY_SPOT = { x: 62, z: 48, turn: -Math.PI / 2 };
 
@@ -506,28 +506,38 @@ function outskirts(root, cfg) {
     // Open corners of street cells an egg could sit in, gathered as the grid
     // is laid out and drawn from at random afterwards, so eggs spread out.
     const eggSpots = [];
+    const blocked = (rect) => keep.some((k) => overlaps(rect, k));
     for (let cx = outer[0] + cell / 2; cx < outer[1]; cx += cell) {
         for (let cz = outer[2] + cell / 2; cz < outer[3]; cz += cell) {
-            const rect = [cx - cell / 2, cx + cell / 2, cz - cell / 2, cz + cell / 2];
-            if (keep.some((k) => overlaps(rect, k))) continue;
             const roll = rng();
             if (roll < (cfg.density ?? 0.72)) {
-                const w = range(8, cell - 8);
-                const d = range(8, cell - 8);
-                const x = cx + range(-1, 1) * (cell - w - 8) / 2;
-                const z = cz + range(-1, 1) * (cell - d - 8) / 2;
                 const h = range(cfg.heights?.[0] ?? 8, cfg.heights?.[1] ?? 16);
-                cfg.building(x, z, w, d, h, rng);
-                // Some flat roofs get stairs up the side, to fight from.
-                if (cfg.stairs && h <= 12.5 && rng() < 0.35) roofStairs(root, cfg.stairs, x, z, w, d, h);
-            } else {
-                if (roll < 0.93 && cfg.prop) cfg.prop(cx + range(-5, 5), cz + range(-5, 5), rng);
-                // Kept well inside the edge walls, so every egg can be reached.
-                eggSpots.push([
-                    clamp(cx + cell * 0.3, outer[0] + 5, outer[1] - 5),
-                    clamp(cz - cell * 0.3, outer[2] + 5, outer[3] - 5),
-                ]);
+                // Judged on the building's own footprint (with room for side
+                // stairs), not its whole cell, and tried a few ways, so
+                // buildings pack in right up to the reserved areas.
+                let placed = false;
+                for (let tryNo = 0; tryNo < 4 && !placed; tryNo++) {
+                    const w = range(cfg.minSize ?? 8, cell - 6);
+                    const d = range(cfg.minSize ?? 8, cell - 6);
+                    const x = cx + range(-1, 1) * Math.max(0, cell - w - 6) / 2;
+                    const z = cz + range(-1, 1) * Math.max(0, cell - d - 6) / 2;
+                    if (blocked([x - w / 2 - 3.5, x + w / 2 + 3.5, z - d / 2 - 3.5, z + d / 2 + 3.5])) continue;
+                    cfg.building(x, z, w, d, h, rng);
+                    // Some flat roofs get stairs up the side, to fight from.
+                    if (cfg.stairs && h <= 12.5 && rng() < 0.35) roofStairs(root, cfg.stairs, x, z, w, d, h);
+                    placed = true;
+                }
+                if (placed) continue;
             }
+            // No building here: a prop, and a spot an egg or street life can use,
+            // kept well inside the edge walls so everything can be reached.
+            const px = clamp(cx + cell * 0.3, outer[0] + 5, outer[1] - 5);
+            const pz = clamp(cz - cell * 0.3, outer[2] + 5, outer[3] - 5);
+            if (blocked([px - 3, px + 3, pz - 3, pz + 3])) continue;
+            const ox = cx + range(-5, 5);
+            const oz = cz + range(-5, 5);
+            if (roll < 0.93 && cfg.prop && !blocked([ox - 5, ox + 5, oz - 6, oz + 6])) cfg.prop(ox, oz, rng);
+            eggSpots.push([px, pz]);
         }
     }
     // Two eggs are saved for the gallery roof; the rest go out in the streets.
@@ -1442,8 +1452,8 @@ function facadeTexture(base, style = 'plain') {
         ctx.fillRect(wx, wy + wh / 2 - 2, ww, 4);
         ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
         ctx.fillRect(wx - 8, wy + wh + 2, ww + 16, 8);
-        if (style === 'shutter') {
-            ctx.fillStyle = '#2f7f9a';
+        if (style === 'shutter' || style === 'green') {
+            ctx.fillStyle = style === 'green' ? '#4f7a3a' : '#2f7f9a';
             ctx.fillRect(wx - ww * 0.42, wy, ww * 0.38, wh);
             ctx.fillRect(wx + ww * 1.04, wy, ww * 0.38, wh);
         }
@@ -1505,6 +1515,219 @@ function dressBuilding(root, x, z, w, d, h, rng, opts = {}) {
     if (opts.roofUnits !== false && rng() < 0.5) {
         const ac = block(root, plain(0xb9bcc1, { metalness: 0.3 }), [2.2, 1.4, 1.6], [x + (rng() - 0.5) * (w - 4), h, z + (rng() - 0.5) * (d - 4)]);
         deco(ac);
+    }
+}
+
+/* ----- buildings you can walk into -----
+
+   Most street buildings on the town maps are hollow: real door openings, an
+   inside that is furnished, and on the taller ones a second floor up an
+   indoor staircase. A person here is 9 units tall, so the ground-floor
+   ceiling sits at 10 (anything lower would be a wall to walk into), and a
+   two-storey building is about 20 tall. */
+
+const UPPER = 10;
+const SLAB = 0.6;
+const DOOR_W = 4.4;
+const DOOR_H = 9.4;
+
+// A wall that faces along one axis, with an optional door gap in it.
+// `axis` 'x' runs along x at the given z; 'z' runs along z at the given x.
+function wallRun(root, material, axis, fixed, from, to, h, door) {
+    const T = 0.6;
+    const piece = (a, b, base = 0, height = h) => {
+        const len = b - a;
+        if (len <= 0.05) return;
+        const mid = (a + b) / 2;
+        const m = material(len, height);
+        if (axis === 'x') block(root, m, [len, height, T], [mid, base, fixed]);
+        else block(root, m, [T, height, len], [fixed, base, mid]);
+    };
+    if (door == null) {
+        piece(from, to);
+        return;
+    }
+    piece(from, door - DOOR_W / 2);
+    piece(door + DOOR_W / 2, to);
+    piece(door - DOOR_W / 2, door + DOOR_W / 2, DOOR_H, h - DOOR_H);
+}
+
+// The inside, furnished as a home, a shop, or a storeroom. `g` is already
+// lifted to the floor it is furnishing; x0..x1, z0..z1 is the room.
+function furnish(g, kind, x0, x1, z0, z1, rng, keepOut) {
+    const cx = (x0 + x1) / 2;
+    const cz = (z0 + z1) / 2;
+    const free = (x, z, r = 2) => !keepOut || !keepOut.some(([a, b, c, d]) => x + r > a && x - r < b && z + r > c && z - r < d);
+    const rug = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(8, x1 - x0 - 4), Math.min(5, z1 - z0 - 4)), new THREE.MeshStandardMaterial({ map: paint(128, carpet), roughness: 1 }));
+    rug.rotation.x = -Math.PI / 2;
+    rug.position.set(cx, FLOOR_Y + 0.05, cz);
+    g.add(deco(rug));
+
+    if (kind === 'home') {
+        // A couch against the back wall with a TV facing it, a table with
+        // chairs, a bed in a corner, a plush and a poster.
+        if (free(cx, z0 + 1.6, 4)) {
+            const fabric = plain([0x3a3f6b, 0x6b3a3a, 0x3a6b4f][Math.floor(rng() * 3)]);
+            block(g, fabric, [6, 1.4, 2.2], [cx, 0, z0 + 1.6]);
+            block(g, fabric, [6, 2.4, 0.5], [cx, 0, z0 + 0.6]);
+            critter(g, CRITTER_KINDS[Math.floor(rng() * CRITTER_KINDS.length)], cx + 2, z0 + 1.7, 0.45, 0, 1.4);
+        }
+        if (free(cx, z1 - 1, 3)) {
+            block(g, plain(0x1b1c1e), [4, 1.4, 1], [cx, 0, z1 - 1]);
+            block(g, plain(0x0e0e10), [4.4, 2.6, 0.2], [cx, 1.4, z1 - 1]);
+        }
+        if (free(x1 - 3, cz, 3)) {
+            table(g, x1 - 3.5, cz, 1.2);
+            chair(g, x1 - 3.5, cz - 2, 0);
+            chair(g, x1 - 3.5, cz + 2, Math.PI);
+        }
+        if (free(x0 + 2.4, z1 - 2.4, 3)) {
+            block(g, plain(0x2b2d35), [3.6, 0.8, 4.4], [x0 + 2.4, 0, z1 - 2.8]);
+            block(g, plain([0xff9cc6, 0x7afcff, 0xf2efe6][Math.floor(rng() * 3)]), [3.4, 0.3, 3.4], [x0 + 2.4, 0.8, z1 - 2.4]);
+        }
+        poster(g, rng, cx - 3.5, 5, z0 + 0.36, 0, 2);
+    } else if (kind === 'shop') {
+        // A counter, shelves of goods along the walls, and a drinks machine.
+        if (free(cx, cz - 1, 4)) {
+            block(g, WOODS[2], [7, 2.4, 1.4], [cx, 0, cz - 1]);
+            block(g, WOODS[1], [7.3, 0.2, 1.7], [cx, 2.4, cz - 1]);
+        }
+        const goods = [0xd6362b, 0x2f9e44, 0xf2b705, 0x1f5fbf, 0xff7eb3];
+        for (const sx of [x0 + 1, x1 - 1]) {
+            if (!free(sx, cz, 2)) continue;
+            for (let level = 0; level < 3; level++) {
+                block(g, WOODS[2], [1.2, 0.18, z1 - z0 - 4], [sx, 1.2 + level * 1.8, cz]);
+                for (let i = 0; i < 4; i++) {
+                    block(g, plain(goods[(level + i) % goods.length]), [0.8, 0.9, 0.8], [sx, 1.38 + level * 1.8, z0 + 3 + i * ((z1 - z0 - 6) / 3)]);
+                }
+            }
+        }
+        if (free(x1 - 2, z0 + 1.5, 2)) vendingMachine(g, x1 - 2, z0 + 1.5, 0, rng);
+        poster(g, rng, cx, 5.5, z0 + 0.36, 0, 2);
+    } else {
+        // Storage: crates stacked two high and a few barrels.
+        const crate = surface(paint(128, crateTexture));
+        for (let i = 0; i < 5; i++) {
+            const bx = x0 + 2.5 + rng() * (x1 - x0 - 5);
+            const bz = z0 + 2.5 + rng() * (z1 - z0 - 5);
+            if (!free(bx, bz, 2)) continue;
+            block(g, crate, [3, 3, 3], [bx, 0, bz], rng() * 0.4);
+            if (rng() < 0.5) block(g, crate, [3, 3, 3], [bx + 0.2, 3, bz], rng() * 0.4);
+        }
+        for (let i = 0; i < 3; i++) {
+            const bx = x0 + 1.5 + rng() * (x1 - x0 - 3);
+            const bz = z0 + 1.5;
+            if (!free(bx, bz, 1.2)) continue;
+            mesh(g, new THREE.CylinderGeometry(0.9, 0.9, 2.2, 14), plain(0x6f4a2a), [bx, 1.1, bz]);
+        }
+    }
+}
+
+// A hollow building: four walls with doors, a floor, sometimes a second
+// storey reached by stairs along one wall, and a walkable roof.
+function hollowBuilding(root, x, z, w, d, h, rng, style) {
+    const T = 0.6;
+    const x0 = x - w / 2;
+    const x1 = x + w / 2;
+    const z0 = z - d / 2;
+    const z1 = z + d / 2;
+    const face = (len, height) => {
+        const map = style.face.clone();
+        map.repeat.set(Math.max(1, Math.round(len / 4)), Math.max(1, Math.round(height / 4)));
+        map.needsUpdate = true;
+        return new THREE.MeshStandardMaterial({ map, roughness: 0.9 });
+    };
+
+    // The main door looks back toward the middle of the map; sometimes a
+    // second one goes in the opposite wall, so the building is a way through.
+    const towardX = Math.abs(x) > Math.abs(z);
+    const main = towardX ? (x > 0 ? '-x' : '+x') : (z > 0 ? '-z' : '+z');
+    const opposite = { '-x': '+x', '+x': '-x', '-z': '+z', '+z': '-z' }[main];
+    const doors = { [main]: true };
+    if (rng() < 0.6) doors[opposite] = true;
+    const along = (lo, hi) => lo + DOOR_W / 2 + 1.5 + rng() * Math.max(0, hi - lo - DOOR_W - 3);
+    const doorAt = {
+        '+z': doors['+z'] ? along(x0, x1) : null,
+        '-z': doors['-z'] ? along(x0, x1) : null,
+        '+x': doors['+x'] ? along(z0, z1) : null,
+        '-x': doors['-x'] ? along(z0, z1) : null,
+    };
+    wallRun(root, face, 'x', z1 - T / 2, x0, x1, h, doorAt['+z']);
+    wallRun(root, face, 'x', z0 + T / 2, x0, x1, h, doorAt['-z']);
+    wallRun(root, face, 'z', x1 - T / 2, z0 + T, z1 - T, h, doorAt['+x']);
+    wallRun(root, face, 'z', x0 + T / 2, z0 + T, z1 - T, h, doorAt['-x']);
+
+    // Awnings over the doors.
+    for (const [side, at] of Object.entries(doorAt)) {
+        if (at == null || !style.awnings) continue;
+        const color = style.awnings[Math.floor(rng() * style.awnings.length)];
+        const awning = new THREE.Mesh(new THREE.BoxGeometry(DOOR_W + 1.2, 0.14, 1.8), plain(color));
+        const out = 1;
+        if (side === '+z') awning.position.set(at, FLOOR_Y + DOOR_H + 0.4, z1 + out);
+        if (side === '-z') awning.position.set(at, FLOOR_Y + DOOR_H + 0.4, z0 - out);
+        if (side === '+x') { awning.position.set(x1 + out, FLOOR_Y + DOOR_H + 0.4, at); awning.rotation.y = Math.PI / 2; }
+        if (side === '-x') { awning.position.set(x0 - out, FLOOR_Y + DOOR_H + 0.4, at); awning.rotation.y = Math.PI / 2; }
+        root.add(deco(awning));
+    }
+
+    // Floor inside.
+    const floorMat = style.floor || surface(paint(128, planks('#7a5332', '#4a3220')), w / 6, d / 6);
+    const inside = new THREE.Mesh(new THREE.PlaneGeometry(w - T * 2, d - T * 2), floorMat);
+    inside.rotation.x = -Math.PI / 2;
+    inside.position.set(x, FLOOR_Y + 0.03, z);
+    root.add(deco(inside));
+
+    const ix0 = x0 + T;
+    const ix1 = x1 - T;
+    const iz0 = z0 + T;
+    const iz1 = z1 - T;
+    // Tall enough that you fit on the upper floor under the roof slab.
+    const twoStorey = h >= 20 && d >= 15 && w >= 14;
+    const kinds = style.kinds || ['home', 'shop', 'storage'];
+    const pick = () => kinds[Math.floor(rng() * kinds.length)];
+
+    // Keep the doorways and the stairs clear of furniture.
+    const keepOut = [];
+    for (const [side, at] of Object.entries(doorAt)) {
+        if (at == null) continue;
+        if (side === '+z') keepOut.push([at - 3, at + 3, iz1 - 4, iz1]);
+        if (side === '-z') keepOut.push([at - 3, at + 3, iz0, iz0 + 4]);
+        if (side === '+x') keepOut.push([ix1 - 4, ix1, at - 3, at + 3]);
+        if (side === '-x') keepOut.push([ix0, ix0 + 4, at - 3, at + 3]);
+    }
+
+    if (twoStorey) {
+        // Stairs up the inside of the -x wall, from the front toward the
+        // back, and the upper floor with a hole over them.
+        const run = Math.min(iz1 - iz0 - 2, 14);
+        const stairX = ix0 + 1.6;
+        const g = new THREE.Group();
+        g.position.set(stairX, 0, iz1 - 0.5);
+        root.add(g);
+        steps(g, style.stairs || plain(0x7d7568), 0, 0, UPPER + SLAB, run, 3);
+        keepOut.push([ix0, ix0 + 3.4, iz1 - 0.5 - run - 1, iz1]);
+        const holeZ0 = iz1 - 0.5 - run;
+        const slabMat = plain(0x8c8478);
+        // Everything east of the stairwell...
+        flagWalkable(block(root, slabMat, [ix1 - (ix0 + 3.2), SLAB, iz1 - iz0], [(ix1 + ix0 + 3.2) / 2, UPPER, (iz0 + iz1) / 2]));
+        // ...and the strip behind it.
+        if (holeZ0 - iz0 > 0.5) flagWalkable(block(root, slabMat, [3.2, SLAB, holeZ0 - iz0], [ix0 + 1.6, UPPER, (iz0 + holeZ0) / 2]));
+        // A rail along the open side of the stairwell.
+        block(root, plain(0x2f3033, { metalness: 0.4 }), [0.15, 1.3, run], [ix0 + 3.3, UPPER + SLAB, iz1 - 0.5 - run / 2]);
+
+        const upstairs = new THREE.Group();
+        upstairs.position.y = UPPER + SLAB;
+        root.add(upstairs);
+        furnish(upstairs, pick(), ix0 + 3.4, ix1, iz0, iz1, rng, []);
+    }
+    furnish(root, pick(), ix0, ix1, iz0, iz1, rng, keepOut);
+
+    // The roof: walkable, with the map's trim or a tiled gable.
+    if (style.gable) {
+        gableRoof(root, surface(style.gable, w / 4, 2), w, d, h, x, z, 0.45, 0);
+    } else {
+        flagWalkable(block(root, style.roof || plain(0x8c8478), [w, 0.6, d], [x, h - 0.6, z]));
+        if (style.trim) block(root, style.trim, [w + 0.8, 0.8, d + 0.8], [x, h, z]);
     }
 }
 
@@ -2033,10 +2256,18 @@ function buildDust2(root, opts = {}) {
         // Long past the arch, and a lane out of every gap in the walls.
         keepClear: [[-6, 16, -115, -36], [-100, -34, -18, 6], [34, 100, -26, -4], [-12, 12, 32, 90]],
         life: { limit: 14 },
+        cell: 27,
+        minSize: 14,
+        heights: [12, 25],
         building: (x, z, w, d, h, rng) => {
-            facadeBox(root, dustFront, plain(0xc9a46a), w, h, d, x, z);
-            block(root, trim, [w + 0.8, 0.8, d + 0.8], [x, h, z]);
-            dressBuilding(root, x, z, w, d, h, rng, { awnings: [0xd94f3d, 0x3f6fb5, 0xe8c547, 0x2f7f6a] });
+            const awnings = [0xd94f3d, 0x3f6fb5, 0xe8c547, 0x2f7f6a];
+            if (w >= 14 && d >= 14 && rng() < 0.7) {
+                hollowBuilding(root, x, z, w, d, h, rng, { face: dustFront, roof: plain(0xc9a46a), trim, awnings });
+            } else {
+                facadeBox(root, dustFront, plain(0xc9a46a), w, h, d, x, z);
+                block(root, trim, [w + 0.8, 0.8, d + 0.8], [x, h, z]);
+                dressBuilding(root, x, z, w, d, h, rng, { awnings });
+            }
             // The B site marker goes on the first building out to the left.
             if (!bMarked && x < -40 && Math.abs(z) < 40) {
                 bMarked = true;
@@ -2127,6 +2358,7 @@ function buildMirage(root, opts = {}) {
 
     if (!opts.wide) return { fog: [0xf6e3c0, 50, 150], halo: 0x3a2a18 };
     const tiles = paint(256, zellige);
+    const mirageFront = facadeTexture(speckle('#d9b98a', ['#c19e6c', '#ecd4ab', '#b58f5f'], 2000), 'shutter');
     outskirts(root, {
         seed: 3,
         gallery: GALLERY_SPOT,
@@ -2134,7 +2366,15 @@ function buildMirage(root, opts = {}) {
         stairs: plain(0xc4a171),
         inner: [-42, 42, -46, 30],
         keepClear: [[-10, 10, -115, 90], [-100, 100, -6, 10]],
+        cell: 27,
+        minSize: 14,
+        heights: [12, 25],
         building: (x, z, w, d, h, rng) => {
+            const awnings = [0xc2462c, 0xe8d6b3, 0x2f7f9a];
+            if (w >= 14 && d >= 14 && rng() < 0.7) {
+                hollowBuilding(root, x, z, w, d, h, rng, { face: mirageFront, roof: plain(0xc9ab7c), trim: plain(0xc4a171), awnings });
+                return;
+            }
             block(root, surface(plaster, w / 6, h / 6), [w, h, d], [x, 0, z]);
             block(root, plain(0xc4a171), [w + 0.8, 0.8, d + 0.8], [x, h, z]);
             // Shuttered windows on the two long faces.
@@ -2281,8 +2521,16 @@ function buildInferno(root, opts = {}) {
         inner: [-42, 42, -56, 28],
         // A banana-style lane running out the side, and the main street.
         keepClear: [[-10, 10, -115, -56], [-100, -42, 8, 24], [42, 100, -20, -6]],
-        heights: [9, 14],
+        cell: 27,
+        minSize: 14,
+        heights: [12, 25],
         building: (x, z, w, d, h, rng) => {
+            const color = walls[Math.floor(rng() * walls.length)];
+            if (w >= 14 && d >= 14 && rng() < 0.7) {
+                const front = facadeTexture(speckle(color, ['#b38a5a', '#f2e0c0', '#a8845a'], 900), 'green');
+                hollowBuilding(root, x, z, w, d, h, rng, { face: front, gable: tiles, awnings: [0x4f7a3a, 0xc2412f, 0xe8d3b0] });
+                return;
+            }
             const quarter = Math.floor(rng() * 4);
             house(x, z, w, h, d, walls[Math.floor(rng() * walls.length)], quarter * (Math.PI / 2));
             // A turned house swaps its width and depth on the ground.
@@ -2381,9 +2629,15 @@ function buildNuke(root, opts = {}) {
         stairs: plain(0x6f7477, { metalness: 0.4 }),
         inner: [-44, 46, -80, 30],
         keepClear: [[-8, 8, 30, 90], [-100, -44, -12, 4], [46, 100, -30, -14]],
-        heights: [10, 18],
+        cell: 27,
+        minSize: 14,
+        heights: [12, 25],
         building: (x, z, w, d, h, rng) => {
             const front = facadeTexture(sidings[Math.floor(rng() * sidings.length)], 'high');
+            if (w >= 14 && d >= 14 && rng() < 0.65) {
+                hollowBuilding(root, x, z, w, d, h, rng, { face: front, roof: plain(0x5f6468), kinds: ['storage', 'storage', 'shop'], stairs: plain(0x6f7477, { metalness: 0.4 }) });
+                return;
+            }
             facadeBox(root, front, plain(0x5f6468), w, h, d, x, z);
             dressBuilding(root, x, z, w, d, h, rng, { door: 0x5f6468, posters: 0.3 });
             block(root, plain(0x5f6468), [w + 0.6, 0.8, d + 0.6], [x, h, z]);
