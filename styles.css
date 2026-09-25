@@ -4394,10 +4394,12 @@ h3 {
     display: inline-block;
 }
 
-.aim-pointer {
+/* Offsets line the arrow's tip up under the middle of the crosshair, just
+   clear of its bottom edge. */
+.title .aim-pointer {
     position: absolute;
-    top: calc(100% + 1px);
-    left: -0.35rem;
+    top: calc(100% - 8px);
+    left: -2px;
     display: flex;
     align-items: flex-start;
     gap: 0.25rem;
@@ -4410,6 +4412,14 @@ h3 {
     transition: color 0.18s ease;
 }
 
+/* The site's link rules underline and brighten every anchor; this is a note,
+   not a nav link, so it stays quiet until hovered. */
+.title .aim-pointer,
+.title .aim-pointer:visited {
+    color: var(--ink-muted);
+    text-decoration: none;
+}
+
 .aim-pointer svg {
     flex: none;
     animation: aim-nudge 2.4s ease-in-out infinite;
@@ -4419,7 +4429,7 @@ h3 {
     padding-top: 0.6rem;
 }
 
-.aim-pointer:hover {
+.title .aim-pointer:hover {
     color: var(--ink-fg);
 }
 
@@ -4446,7 +4456,7 @@ h3 {
 /* On a phone the crosshair sits past the middle of the row, so the note wraps
    onto two lines rather than running off the edge. */
 @media (max-width: 640px) {
-    .aim-pointer {
+    .title .aim-pointer {
         width: 9.5rem;
         white-space: normal;
         text-align: left;
