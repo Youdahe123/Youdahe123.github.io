@@ -1752,6 +1752,10 @@ function buildRifle() {
     box(g, GUNMETAL, [0.1, 0.11, 0.6], [0, 0.03, -0.08]);
     box(g, GUNMETAL, [0.095, 0.09, 0.34], [0, -0.07, -0.02]);
     box(g, POLYMER, [0.004, 0.04, 0.12], [0.052, 0.03, -0.04]);
+    const port = new THREE.Object3D();
+    port.position.set(0.055, 0.04, -0.04);
+    g.add(port);
+    g.userData.port = port;
     box(g, GUNMETAL, [0.14, 0.02, 0.04], [0, 0.08, 0.2]);
 
     box(g, POLYMER, [0.12, 0.12, 0.52], [0, 0.03, -0.64]);
@@ -1788,13 +1792,20 @@ function buildRifle() {
 function buildPistol() {
     const g = new THREE.Group();
 
-    box(g, GUNMETAL, [0.075, 0.085, 0.46], [0, 0.05, -0.2]);
-    for (let i = 0; i < 5; i++) box(g, POLYMER, [0.078, 0.06, 0.008], [0, 0.05, -i * 0.02]);
+    // The slide, with its sights, runs back on every shot.
+    const slide = new THREE.Group();
+    box(slide, GUNMETAL, [0.075, 0.085, 0.46], [0, 0.05, -0.2]);
+    for (let i = 0; i < 5; i++) box(slide, POLYMER, [0.078, 0.06, 0.008], [0, 0.05, -i * 0.02]);
+    tube(slide, POLYMER, 0.014, 0.01, [0, 0.05, -0.432]);
+    box(slide, STEEL, [0.012, 0.018, 0.018], [0, 0.1, -0.4]);
+    box(slide, STEEL, [0.05, 0.02, 0.02], [0, 0.1, 0]);
+    g.add(slide);
+    g.userData.slide = slide;
     box(g, POLYMER, [0.07, 0.05, 0.4], [0, -0.02, -0.2]);
-    tube(g, POLYMER, 0.014, 0.01, [0, 0.05, -0.432]);
-
-    box(g, STEEL, [0.012, 0.018, 0.018], [0, 0.1, -0.4]);
-    box(g, STEEL, [0.05, 0.02, 0.02], [0, 0.1, 0]);
+    const port = new THREE.Object3D();
+    port.position.set(0.04, 0.07, -0.14);
+    g.add(port);
+    g.userData.port = port;
 
     box(g, POLYMER, [0.07, 0.26, 0.13], [0, -0.17, 0.03], [0.28, 0, 0]);
     // The magazine, mostly inside the grip; the base plate is what shows.
@@ -1816,8 +1827,13 @@ function buildPistol() {
 function buildDeagle() {
     const g = new THREE.Group();
 
-    box(g, CHROME, [0.095, 0.1, 0.56], [0, 0.06, -0.24]);
-    for (let i = 0; i < 6; i++) box(g, STEEL, [0.098, 0.07, 0.008], [0, 0.06, -0.01 - i * 0.018]);
+    // The slide runs back under the fixed barrel on every shot, as on the
+    // real gun, and cocks the hammer as it goes.
+    const slide = new THREE.Group();
+    box(slide, CHROME, [0.095, 0.1, 0.56], [0, 0.06, -0.24]);
+    for (let i = 0; i < 6; i++) box(slide, STEEL, [0.098, 0.07, 0.008], [0, 0.06, -0.01 - i * 0.018]);
+    g.add(slide);
+    g.userData.slide = slide;
     box(g, CHROME, [0.07, 0.05, 0.46], [0, 0.13, -0.3]);
     box(g, POLYMER, [0.02, 0.006, 0.44], [0, 0.158, -0.3]);
     box(g, STEEL, [0.09, 0.06, 0.46], [0, -0.02, -0.24]);
@@ -1825,7 +1841,15 @@ function buildDeagle() {
 
     box(g, STEEL, [0.014, 0.022, 0.02], [0, 0.17, -0.5]);
     box(g, STEEL, [0.05, 0.024, 0.02], [0, 0.17, -0.08]);
-    box(g, STEEL, [0.03, 0.05, 0.03], [0, 0.11, 0.06], [-0.4, 0, 0]);
+    const hammer = new THREE.Group();
+    hammer.position.set(0, 0.09, 0.05);
+    box(hammer, STEEL, [0.03, 0.05, 0.03], [0, -0.005, 0.01], [-0.4, 0, 0]);
+    g.add(hammer);
+    g.userData.hammer = hammer;
+    const port = new THREE.Object3D();
+    port.position.set(0.05, 0.09, -0.12);
+    g.add(port);
+    g.userData.port = port;
 
     box(g, POLYMER, [0.085, 0.3, 0.14], [0, -0.2, 0.04], [0.22, 0, 0]);
     const mag = new THREE.Group();
@@ -1993,6 +2017,10 @@ function buildSmg() {
     box(g, GUNMETAL, [0.016, 0.03, 0.3], [0.05, -0.02, 0.2]);
     box(g, GUNMETAL, [0.016, 0.12, 0.03], [0.05, -0.07, 0.34]);
     box(g, STEEL, [0.03, 0.02, 0.05], [0, 0.1, 0.1]);
+    const port = new THREE.Object3D();
+    port.position.set(0.045, 0.05, -0.08);
+    g.add(port);
+    g.userData.port = port;
 
     attachMuzzle(g, [0, 0.03, -0.86], 0xffc36b);
     return g;
@@ -2157,10 +2185,12 @@ const WEAPONS = [
         cooldown: 95, auto: true, kick: 3.2, punch: 0.0045, spread: { step: 0.005, max: 0.045 }, flash: 0.9, tracer: 0xffd88a, tracerWidth: 0.45 },
     { id: 'pistol', label: 'pistol', build: buildPistol, scale: 0.42, ...PISTOL_HOLD, showcase: 0.95,
         inspectStyle: 'flipside', inspectMs: 2400, mag: 20, reloadStyle: 'mag', reloadMs: 1600, pivot: new THREE.Vector3(0, 0.02, -0.18),
+        slideTravel: 0.09, muzzleFlip: 0.16, grip: new THREE.Vector3(0, -0.2, 0.05),
         cooldown: 110, auto: false, kick: 4.6, punch: 0.006, spread: { step: 0.006, max: 0.03 }, flash: 0.75, tracer: 0xffd88a, tracerWidth: 0.4 },
     { id: 'deagle', label: 'deagle', build: buildDeagle, scale: 0.42, ...PISTOL_HOLD, showcase: 1.12,
         inspectStyle: 'twirl', inspectMs: 2600, mag: 7, reloadStyle: 'mag', reloadMs: 1900, pivot: new THREE.Vector3(0, -0.08, -0.12),
-        cooldown: 380, auto: false, kick: 11, punch: 0.02, spread: { step: 0.03, max: 0.06 }, flash: 1.5, tracer: 0xffd08a, tracerWidth: 0.6 },
+        slideTravel: 0.13, muzzleFlip: 0.55, grip: new THREE.Vector3(0, -0.24, 0.06),
+        cooldown: 380, auto: false, kick: 6.5, punch: 0.02, spread: { step: 0.03, max: 0.06 }, flash: 1.5, tracer: 0xffd08a, tracerWidth: 0.6 },
     { id: 'revolver', label: 'revolver', build: buildRevolver, scale: 0.42, ...PISTOL_HOLD, showcase: 1.25,
         inspectStyle: 'cylinder', inspectMs: 3000, mag: 8, reloadStyle: 'cylinder', reloadMs: 2300, pivot: new THREE.Vector3(0, -0.08, 0.05),
         cooldown: 480, auto: false, kick: 9.5, punch: 0.016, spread: null, flash: 1.3, tracer: 0xffd08a, tracerWidth: 0.55 },
@@ -2231,6 +2261,8 @@ function buildViewmodel() {
     bolt.rotation.x = Math.PI / 2; // length along the pivot's +Z, which lookAt aims
     boltPivot.add(bolt);
     viewScene.add(boltPivot);
+
+    buildCasings();
 }
 
 function selectWeapon(id) {
@@ -2267,6 +2299,76 @@ const X_AXIS = new THREE.Vector3(1, 0, 0);
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const DEFAULT_PIVOT = new THREE.Vector3(0, -0.08, -0.1);
 let pumpStart = 0;
+
+// When the current gun last fired, for the slide, the hammer and the muzzle
+// flip, which all play out over a few hundred milliseconds after a shot.
+let shotAt = 0;
+
+// How far the muzzle has flipped at a moment after the shot: a hard snap up
+// in the first few milliseconds, then a settle back with a small dip past
+// rest, the way a heavy handgun rolls back into the hand.
+function muzzleFlipAt(ms) {
+    const e = ms / 1000;
+    if (e < 0.04) return easeOut(e / 0.04);
+    return Math.exp(-(e - 0.04) * 8) * Math.cos((e - 0.04) * 10);
+}
+
+// The slide: slammed back in a few milliseconds, sprung home a little slower.
+function slideAt(ms) {
+    if (ms < 30) return ms / 30;
+    return Math.max(0, 1 - (ms - 30) / 95);
+}
+
+/* ---------- brass ----------
+
+   Spent casings kicked out of the ejection port, up and to the right, tumbling
+   as they fall. They live in the viewmodel scene rather than on the gun, so
+   once they are out they fly free of it. */
+
+const CASING_COUNT = 10;
+const casings = [];
+const portWorld = new THREE.Vector3();
+
+function buildCasings() {
+    const brass = metal(0xc9a25a, 0.3, 0.85);
+    const geometry = new THREE.CylinderGeometry(0.006, 0.006, 0.022, 8);
+    for (let i = 0; i < CASING_COUNT; i++) {
+        const mesh = new THREE.Mesh(geometry, brass);
+        mesh.visible = false;
+        viewScene.add(mesh);
+        casings.push({ mesh, born: 0, v: new THREE.Vector3(), spin: new THREE.Vector3() });
+    }
+}
+
+function ejectCasing() {
+    const port = gun.userData.port;
+    if (!port) return;
+    let slot = casings.find((c) => !c.born);
+    if (!slot) slot = casings.reduce((a, b) => (a.born < b.born ? a : b));
+    gun.updateMatrixWorld();
+    port.getWorldPosition(portWorld);
+    slot.mesh.position.copy(portWorld);
+    slot.mesh.visible = true;
+    slot.born = performance.now();
+    slot.v.set(1.1 + Math.random() * 0.5, 1.0 + Math.random() * 0.5, 0.25 + Math.random() * 0.2);
+    slot.spin.set(Math.random() * 30, Math.random() * 20, 18 + Math.random() * 20);
+}
+
+function updateCasings(now, dt) {
+    for (const c of casings) {
+        if (!c.born) continue;
+        if (now - c.born > 650) {
+            c.born = 0;
+            c.mesh.visible = false;
+            continue;
+        }
+        c.v.y -= 7 * dt;
+        c.mesh.position.addScaledVector(c.v, dt);
+        c.mesh.rotation.x += c.spin.x * dt;
+        c.mesh.rotation.y += c.spin.y * dt;
+        c.mesh.rotation.z += c.spin.z * dt;
+    }
+}
 
 /* ---------- ammo ---------- */
 
@@ -2598,6 +2700,17 @@ function updateGun(now, dt) {
             twirlTurned.copy(TWIRL_PIVOT).applyQuaternion(gun.quaternion);
             gun.position.add(twirlStill.sub(twirlTurned));
         }
+
+        // Muzzle flip, turning the gun up round the hand on the grip rather
+        // than round its middle, the same way the twirl keeps its pivot still.
+        if (weapon.muzzleFlip && shotAt && now - shotAt < 700) {
+            const flipUp = weapon.muzzleFlip * muzzleFlipAt(now - shotAt);
+            TWIRL_PIVOT.copy(weapon.grip).multiplyScalar(weapon.scale);
+            twirlStill.copy(TWIRL_PIVOT).applyQuaternion(gun.quaternion);
+            gun.quaternion.multiply(twirlTurn.setFromAxisAngle(X_AXIS, flipUp));
+            twirlTurned.copy(TWIRL_PIVOT).applyQuaternion(gun.quaternion);
+            gun.position.add(twirlStill.sub(twirlTurned));
+        }
     }
 
     // The revolver's cylinder turns one chamber per shot, quickly but not
@@ -2626,6 +2739,18 @@ function updateGun(now, dt) {
         handle.rotation.z = b.turn;
         handle.position.z = 0.12 + b.pull;
     }
+
+    // The slide runs back on a shot, and is racked at the end of a reload.
+    const slide = gun.userData.slide;
+    if (slide) {
+        const fired = shotAt ? slideAt(now - shotAt) : 0;
+        const back = Math.max(fired, ins.back / 0.045);
+        slide.position.z = back * (weapon.slideTravel || 0.08);
+        const hammer = gun.userData.hammer;
+        if (hammer) hammer.rotation.x = Math.max(back, 0) * 0.7;
+    }
+
+    updateCasings(now, dt);
 
     // A shotgun shell rising into the loading port.
     const shell = gun.userData.shell;
@@ -2691,6 +2816,8 @@ function fireGun(ndc) {
     flash.userData.puff.material.rotation = Math.random() * Math.PI * 2;
     if (gun.userData.drum) gun.userData.drumAngle += Math.PI / 3;
     if (gun.userData.pump) pumpStart = flashStart + 140;
+    shotAt = flashStart;
+    ejectCasing();
 
     gun.updateMatrixWorld();
     muzzle.getWorldPosition(muzzleWorld);
@@ -2734,6 +2861,7 @@ function showGun(visible) {
     flashStart = 0;
     boltStart = 0;
     triggerHeld = false;
+    shotAt = 0;
     flash.visible = false;
     flashLight.intensity = 0;
     boltPivot.visible = false;
