@@ -2166,7 +2166,7 @@ const WEAPONS = [
         cooldown: 480, auto: false, kick: 9.5, punch: 0.016, spread: null, flash: 1.3, tracer: 0xffd08a, tracerWidth: 0.55 },
     { id: 'awp', label: 'awp', build: buildAwp, scale: 0.34, ...RIFLE_HOLD, showcase: 2.1,
         inspectStyle: 'glass', inspectMs: 3000, mag: 10, reloadStyle: 'bolt', reloadMs: 2700, boltAction: true,
-        cooldown: 1300, auto: false, kick: 13, punch: 0.03, spread: null, scope: true, unscopedSpread: 0.09,
+        cooldown: 820, auto: false, kick: 13, punch: 0.03, spread: null, scope: true, unscopedSpread: 0.09,
         flash: 1.6, tracer: 0xffe2a8, tracerWidth: 0.7 },
     { id: 'shotgun', label: 'shotgun', build: buildShotgun, scale: 0.36, ...RIFLE_HOLD, showcase: 2.1,
         inspectStyle: 'rack', inspectMs: 2600, mag: 8, reloadStyle: 'shells', shellMs: 480,
@@ -2279,7 +2279,7 @@ let reloadFrom = 0;
 let autoReloadAt = 0;
 // The AWP works its bolt after every shot, then scopes back in if it was
 // scoped when it fired, the way csgo does.
-const BOLT_MS = 950;
+const BOLT_MS = 620;
 let chamberStart = 0;
 let rezoom = false;
 
@@ -2488,7 +2488,7 @@ function reloadSounds() {
 }
 
 function boltSounds() {
-    const start = 0.15;
+    const start = 0.06;
     const L = BOLT_MS / 1000;
     tick(start + L * 0.12, 3200);
     tick(start + L * 0.4, 2600);
@@ -2805,10 +2805,24 @@ function tappedGun(ndc) {
 }
 
 // A shot from the middle of the screen, which is where the crosshair is.
+// A click this close to the gun being ready is held and fired the moment it
+// is, instead of being dropped and needing a second click.
+const BUFFER_MS = 220;
+let bufferedShot = 0;
+
 function fire(ndc) {
     if (!running) return;
     const now = performance.now();
-    if (now - lastShotAt < weapon.cooldown) return;
+    const ready = Math.max(lastShotAt + weapon.cooldown, chamberStart ? chamberStart + BOLT_MS : 0);
+    if (now < ready) {
+        if (!weapon.auto && !bufferedShot && ready - now <= BUFFER_MS) {
+            bufferedShot = setTimeout(() => {
+                bufferedShot = 0;
+                fire(ndc);
+            }, ready - now + 1);
+        }
+        return;
+    }
     // Settle any reload or bolt that finished since the last frame, so a
     // click never waits on the render loop to notice.
     tickAmmo(now);
@@ -2870,8 +2884,10 @@ function fire(ndc) {
     // scope once it closes if it was scoped when it fired.
     if (weapon.boltAction && ammo[weapon.id] > 0) {
         rezoom = scoped;
-        chamberStart = now + 150;
+        chamberStart = now + 60;
         boltSounds();
+        // Close the bolt (and scope back in) on time even if frames lag.
+        setTimeout(() => tickAmmo(performance.now()), 60 + BOLT_MS + 5);
     }
     if (scoped) setScope(false);
 
@@ -3318,7 +3334,11 @@ elReset.addEventListener('click', () => {
 
 // Firing: a pointer-locked click shoots down the crosshair, a tap on a phone
 // shoots wherever the finger landed.
-canvas.addEventListener('pointerdown', (event) => {
+// Mouse buttons come through mousedown, which fires for every button. A
+// pointerdown only fires for the first button pressed, so a left click while
+// the right button was still down (scope, then shoot) used to be swallowed.
+// Touch and pen still come through pointerdown.
+function onPress(event) {
     if (!running) return;
 
     if (event.button === 2) {
@@ -3345,6 +3365,18 @@ canvas.addEventListener('pointerdown', (event) => {
 
     triggerHeld = true;
     fire();
+}
+
+// A tap also produces a compatibility mousedown a moment later; ignore it so
+// one tap is one shot.
+let lastTouchAt = -Infinity;
+canvas.addEventListener('mousedown', (event) => {
+    if (performance.now() - lastTouchAt > 800) onPress(event);
+});
+canvas.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse') return;
+    lastTouchAt = performance.now();
+    onPress(event);
 });
 
 // On a phone there is no R key, so the counter itself is the reload button.
@@ -3373,8 +3405,11 @@ elSound.addEventListener('click', () => {
 // Right click is the scope, never the browser menu.
 stage.addEventListener('contextmenu', (event) => event.preventDefault());
 
-document.addEventListener('pointerup', () => {
-    triggerHeld = false;
+document.addEventListener('mouseup', (event) => {
+    if (event.button === 0) triggerHeld = false;
+});
+document.addEventListener('pointerup', (event) => {
+    if (event.pointerType !== 'mouse') triggerHeld = false;
 });
 
 document.addEventListener('mousemove', onMouseMove);
