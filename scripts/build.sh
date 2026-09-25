@@ -40,9 +40,18 @@ rsync -a . _site/ \
 # deploy changes their URLs. GitHub Pages lets browsers cache them for ten
 # minutes, and without this a visitor can get new HTML against an old
 # stylesheet. perl rather than sed -i, which differs between macOS and Linux.
-for asset in styles.css *.js; do
+#
+# Modules import each other too (aim.js imports bots.js), so those imports get
+# the same treatment first, and each page is then stamped with the hash of the
+# staged file, so a change to an imported module changes its importer's URL.
+for asset in *.js; do
   [ -f "$asset" ] || continue
   hash=$(shasum "$asset" | cut -c1-8)
+  perl -pi -e "s#from '\./\Q$asset\E'#from './$asset?v=$hash'#g" _site/*.js
+done
+for asset in styles.css *.js; do
+  [ -f "_site/$asset" ] || continue
+  hash=$(shasum "_site/$asset" | cut -c1-8)
   perl -pi -e "s#(href|src)=\"\Q$asset\E\"#\$1=\"$asset?v=$hash\"#g" _site/*.html
 done
 

@@ -5322,6 +5322,134 @@ h1.post-full-title::before {
     background: var(--ink-fg);
 }
 
+.aim-bot-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1rem;
+}
+
+.aim-pick[hidden] {
+    display: none;
+}
+
+/* ---- bots mode HUD ---- */
+
+.aim-health {
+    position: absolute;
+    left: 2.2rem;
+    bottom: 2rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    font-family: var(--ink-font);
+    color: var(--ink-fg);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+    pointer-events: none;
+}
+
+.aim-health[hidden] {
+    display: none;
+}
+
+.aim-health-cross {
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--ink-muted);
+}
+
+.aim-health b {
+    font-size: 40px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.aim-health.is-low b,
+.aim-health.is-low .aim-health-cross {
+    color: #ff6b5a;
+}
+
+/* csgo's kill feed: dark rows top right, your kills outlined in red. */
+.aim-killfeed {
+    position: absolute;
+    top: 1.4rem;
+    right: 1.4rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.3rem;
+    font-family: var(--ink-font);
+    font-size: 13px;
+    pointer-events: none;
+}
+
+.kf-row {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.28rem 0.6rem;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid transparent;
+    color: #f0e9dd;
+    transition: opacity 0.5s ease;
+}
+
+.kf-row.is-mine {
+    border-color: #d9372b;
+}
+
+.kf-row.is-leaving {
+    opacity: 0;
+}
+
+.kf-ct {
+    color: #7fb2ff;
+    font-weight: 600;
+}
+
+.kf-t {
+    color: #e6b84f;
+    font-weight: 600;
+}
+
+.kf-gun {
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: rgba(240, 233, 221, 0.75);
+}
+
+.kf-hs {
+    display: inline-flex;
+    color: #f0e9dd;
+}
+
+.aim-damage {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(ellipse at center, transparent 45%, rgba(170, 10, 10, 0.75) 100%);
+}
+
+.aim-death {
+    position: absolute;
+    top: 38%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin: 0;
+    padding: 0.6rem 1.1rem;
+    background: rgba(0, 0, 0, 0.6);
+    font-family: var(--ink-font);
+    font-size: 15px;
+    color: #f0e9dd;
+    pointer-events: none;
+}
+
+.aim-death[hidden] {
+    display: none;
+}
+
 .aim-scope {
     position: absolute;
     inset: 0;

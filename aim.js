@@ -4,6 +4,7 @@
 // viewmodel. Thirty seconds, one high score, kept in this browser. three.js
 // does the drawing; the pointer lock, the spawning and the scoring are all here.
 import * as THREE from './vendor/three/three.module.min.js';
+import { createBots, DIFFICULTIES, BOT_COUNTS } from './bots.js';
 
 const ROUND_MS = 30000;
 const TARGET_COUNT = 5;
@@ -17,6 +18,11 @@ const XH_COLOR_KEY = 'aim.crosshairColor';
 const SOUND_KEY = 'aim.sound';
 const SENS_KEY = 'aim.sensitivity';
 const RELOAD_KEY = 'aim.reload';
+const MODE_KEY = 'aim.mode';
+const DIFFICULTY_KEY = 'aim.difficulty';
+const BOT_COUNT_KEY = 'aim.botCount';
+const BOTS_BEST_KEY = 'aim.botsBest';
+const BOTS_ROUND_MS = 90000;
 
 // The arena is a box the player stands in the middle of. Targets spawn on a
 // shell in front of them, never behind, so a round is never spent spinning.
@@ -83,6 +89,14 @@ const elAmmoMag = document.getElementById('aimAmmoMag');
 const elAmmoFill = document.getElementById('aimAmmoFill');
 const elAmmoReserve = document.getElementById('aimAmmoReserve');
 const elReloads = document.getElementById('aimReloads');
+const elModes = document.getElementById('aimModes');
+const elBotRow = document.getElementById('aimBotRow');
+const elDifficulty = document.getElementById('aimDifficulty');
+const elBotCount = document.getElementById('aimBotCount');
+const elTargetRow = document.getElementById('aimTargetRow');
+const elScoreLabel = document.getElementById('aimScoreLabel');
+const elAccLabel = document.getElementById('aimAccLabel');
+const elHealth = document.getElementById('aimHealth');
 const elSound = document.getElementById('aimSound');
 const elFullscreen = document.getElementById('aimFullscreen');
 const elSensRange = document.getElementById('aimSensRange');
@@ -93,6 +107,32 @@ const elSensValue = document.getElementById('aimSensValue');
 const touchOnly = window.matchMedia('(hover: none), (pointer: coarse)').matches;
 
 let renderer, scene, camera, targetGroup;
+
+// Two ways to play: the aim trainer's floating targets, or walking a map
+// against bots that shoot back (bots.js).
+const MODES = [
+    { id: 'aim', label: 'aim lab' },
+    { id: 'bots', label: 'bots' },
+];
+let mode = 'aim';
+let bots = null;
+let kills = 0;
+let deaths = 0;
+const botsMode = () => mode === 'bots';
+
+// Movement keys, held.
+const keys = { forward: false, back: false, left: false, right: false, jump: false, walk: false };
+const KEYMAP = {
+    KeyW: 'forward', ArrowUp: 'forward',
+    KeyS: 'back', ArrowDown: 'back',
+    KeyA: 'left', ArrowLeft: 'left',
+    KeyD: 'right', ArrowRight: 'right',
+    Space: 'jump',
+    ShiftLeft: 'walk', ShiftRight: 'walk',
+};
+function clearKeys() {
+    for (const k of Object.keys(keys)) keys[k] = false;
+}
 let yaw = 0;
 let pitch = 0;
 let running = false;
@@ -1099,13 +1139,13 @@ function buildAncient(root) {
 }
 
 const MAPS = [
-    { id: 'training', label: 'training', build: buildRange, defaults: { background: 0x121312, fog: [0x121312, 18, 46], halo: INK } },
-    { id: 'dust2', label: 'dust ii', build: buildDust2 },
-    { id: 'mirage', label: 'mirage', build: buildMirage },
-    { id: 'inferno', label: 'inferno', build: buildInferno },
-    { id: 'nuke', label: 'nuke', build: buildNuke },
-    { id: 'vertigo', label: 'vertigo', build: buildVertigo },
-    { id: 'ancient', label: 'ancient', build: buildAncient },
+    { id: 'training', bounds: [-18, 18, -18, 18], label: 'training', build: buildRange, defaults: { background: 0x121312, fog: [0x121312, 18, 46], halo: INK } },
+    { id: 'dust2', bounds: [-32, 32, -34, 30], label: 'dust ii', build: buildDust2 },
+    { id: 'mirage', bounds: [-31, 31, -36, 28], label: 'mirage', build: buildMirage },
+    { id: 'inferno', bounds: [-30, 30, -30, 28], label: 'inferno', build: buildInferno },
+    { id: 'nuke', bounds: [-26, 31, -33, 28], label: 'nuke', build: buildNuke },
+    { id: 'vertigo', bounds: [-29, 29, -44, 24], label: 'vertigo', build: buildVertigo },
+    { id: 'ancient', bounds: [-34, 34, -46, 24], label: 'ancient', build: buildAncient },
 ];
 
 let mapKind = MAPS[0];
@@ -1133,6 +1173,8 @@ function selectMap(id) {
     scene.fog = settings.fog ? new THREE.Fog(settings.fog[0], settings.fog[1], settings.fog[2]) : null;
     HALO_MATERIAL.color.set(settings.halo ?? INK);
     envUpdate = settings.update || null;
+    // In bots mode this is the ground you walk: where the edges are.
+    if (bots) bots.setBounds(mapKind.bounds);
 }
 
 /* ---------- the beaver ---------- */
@@ -2693,6 +2735,12 @@ function updateGun(now, dt) {
             lerp(weapon.home.pos[1], weapon.inspect.pos[1], pose) - sway.y * 0.5 + Math.sin(now / 900) * 0.005 * breathe + kick * 0.022 + ins.lift,
             lerp(weapon.home.pos[2], weapon.inspect.pos[2], pose) + kick * 0.1 + ins.back
         );
+        // Walking in bots mode bobs the gun with each stride.
+        if (botsMode() && running) {
+            const stride = Math.min(1, bots.speed / 21);
+            gun.position.x += Math.sin(bots.bobPhase) * 0.012 * stride;
+            gun.position.y -= Math.abs(Math.cos(bots.bobPhase)) * 0.01 * stride;
+        }
         gun.rotation.set(
             lerp(weapon.home.rot[0], weapon.inspect.rot[0], pose) - kick * 0.26 + sway.y * 0.9 + ins.pitch,
             lerp(weapon.home.rot[1], weapon.inspect.rot[1], pose) + sway.x * 1.1 + ins.yaw,
@@ -2953,6 +3001,7 @@ let bufferedShot = 0;
 
 function fire(ndc) {
     if (!running) return;
+    if (botsMode() && !bots.alive) return;
     const now = performance.now();
     const ready = Math.max(lastShotAt + weapon.cooldown, chamberStart ? chamberStart + BOLT_MS : 0);
     if (now < ready) {
@@ -3000,7 +3049,29 @@ function fire(ndc) {
     // A sniper fired from the hip goes roughly where it is pointed. Not on a
     // phone, where there is no way to scope in.
     if (weapon.scope && !scoped && !ndc) aim = wander(weapon.unscopedSpread);
+    // Running and jumping throw shots off, as in csgo; walking barely does.
+    if (botsMode()) {
+        const moving = clamp((bots.speed - 11) / 10, 0, 1) + (bots.airborne ? 1 : 0);
+        if (moving > 0) aim = wander(moving * (weapon.scope ? 0.12 : weapon.pellets ? 0.01 : 0.035));
+    }
     fireGun(aim);
+
+    // Bots mode: the bullet (or each pellet) goes into the map and the bots.
+    if (botsMode()) {
+        camera.updateMatrixWorld();
+        let landed = false;
+        for (let i = 0; i < (weapon.pellets || 1); i++) {
+            raycaster.setFromCamera(weapon.pellets ? wander(weapon.pelletSpread) : aim, camera);
+            const result = bots.shoot(raycaster.ray, weapon.id, weapon.label);
+            if (result.hit) landed = true;
+        }
+        if (landed) {
+            hits++;
+            tone({ at: 0.02, from: 1300, to: 1050, decay: 0.08, volume: 0.1, type: 'triangle' });
+        }
+        afterShot(now);
+        return;
+    }
 
     // A shotgun sends a cone of pellets and scores the nearest target any of
     // them finds. One hit per shot at most, so accuracy stays a fraction.
@@ -3021,6 +3092,12 @@ function fire(ndc) {
         placeTarget(target);
     }
 
+    afterShot(now);
+}
+
+// Everything after the bullet: the AWP's bolt, unscoping, the empty-magazine
+// reload, and the view punch.
+function afterShot(now) {
     // The AWP: out of the scope on the shot, the bolt worked, and back into the
     // scope once it closes if it was scoped when it fired.
     if (weapon.boltAction && ammo[weapon.id] > 0) {
@@ -3060,15 +3137,24 @@ function fire(ndc) {
 function startRound() {
     hits = 0;
     shots = 0;
+    kills = 0;
+    deaths = 0;
     remainingMs = 0;
     yaw = 0;
     pitch = 0;
     applyLook();
     targetGroup.children.forEach(placeTarget);
+    targetGroup.visible = !botsMode();
+    clearKeys();
+    if (botsMode()) {
+        bots.start();
+        yaw = Math.random() * Math.PI * 2;
+        applyLook();
+    }
 
     running = true;
     fallbackAim = false;
-    endsAt = performance.now() + ROUND_MS;
+    endsAt = performance.now() + (botsMode() ? BOTS_ROUND_MS : ROUND_MS);
     stage.classList.add('is-running');
     panel.hidden = true;
     hideSave();
@@ -3117,6 +3203,26 @@ function endRound() {
     showGun(false);
     setShowcase(true);
     if (document.pointerLockElement) document.exitPointerLock();
+    clearKeys();
+
+    if (botsMode()) {
+        const top = botsBest();
+        const beatenBots = kills > top;
+        if (beatenBots) remember(BOTS_BEST_KEY, String(kills));
+        bots.stop();
+        targetGroup.visible = true;
+        applyLook();
+        elTitle.textContent = beatenBots ? 'new best' : 'time';
+        elStatLabel.textContent = 'kills';
+        elStatValue.textContent = String(kills);
+        elStatNote.textContent = `${deaths} ${deaths === 1 ? 'death' : 'deaths'} · ${headshotRate()}% headshots · ${accuracy()}% accuracy · best ${Math.max(top, kills)}`;
+        elStart.textContent = 'go again';
+        setNote('');
+        lastRun = null;
+        lockPicks(false);
+        elSaveOpen.hidden = true;
+        return;
+    }
 
     const beaten = hits > best;
     if (beaten) {
@@ -3145,8 +3251,37 @@ function accuracy() {
 }
 
 function updateHud() {
+    if (botsMode()) {
+        elScore.textContent = String(kills);
+        elAcc.textContent = String(deaths);
+        return;
+    }
     elScore.textContent = String(hits);
     elAcc.textContent = `${accuracy()}%`;
+}
+
+function headshotRate() {
+    return kills ? Math.round((bots.stats.headshots / kills) * 100) : 0;
+}
+
+function botsBest() {
+    return Number(recall(BOTS_BEST_KEY)) || 0;
+}
+
+// The start panel's big number and labels follow the mode.
+function showModeStats() {
+    elScoreLabel.textContent = botsMode() ? 'kills' : 'hits';
+    elAccLabel.textContent = botsMode() ? 'deaths' : 'accuracy';
+    if (botsMode()) {
+        const top = botsBest();
+        elStatLabel.textContent = 'most kills';
+        elStatValue.textContent = String(top);
+        elStatNote.textContent = top ? `90 second deathmatch · best ${top}` : '90 second deathmatch · no runs yet';
+    } else {
+        elStatLabel.textContent = 'high score';
+        elStatValue.textContent = String(best);
+        elStatNote.textContent = best ? `30 seconds · best ${best}` : '30 seconds · no runs yet';
+    }
 }
 
 // One loop for the whole page, running whether or not a round is on: the
@@ -3163,6 +3298,7 @@ function loop(now) {
     updateTargets(now);
     updateBursts(now);
     if (envUpdate) envUpdate(now, dt);
+    if (running && botsMode()) bots.update(now, dt, { keys, yaw });
     updateGun(now, dt);
 
     if (running) tickAmmo(now);
@@ -3199,10 +3335,14 @@ function pause(message) {
     showGun(false);
     setShowcase(true);
     if (document.pointerLockElement) document.exitPointerLock();
+    clearKeys();
+    elHealth.hidden = true;
     elTitle.textContent = 'paused';
-    elStatLabel.textContent = 'hits so far';
-    elStatValue.textContent = String(hits);
-    elStatNote.textContent = `${(remainingMs / 1000).toFixed(1)}s left · best ${best}`;
+    elStatLabel.textContent = botsMode() ? 'kills so far' : 'hits so far';
+    elStatValue.textContent = String(botsMode() ? kills : hits);
+    elStatNote.textContent = botsMode()
+        ? `${(remainingMs / 1000).toFixed(1)}s left · ${deaths} ${deaths === 1 ? 'death' : 'deaths'}`
+        : `${(remainingMs / 1000).toFixed(1)}s left · best ${best}`;
     elStart.textContent = 'resume';
     hideSave();
     lockPicks(true);
@@ -3225,6 +3365,7 @@ function resume() {
     crosshair.hidden = touchOnly;
     showGun(true);
     elAmmo.hidden = false;
+    elHealth.hidden = !botsMode();
     updateAmmo();
     setNote('');
     if (!touchOnly) lockPointer();
@@ -3274,7 +3415,7 @@ function buildChips(container, options, selected, onPick) {
 
 // Mid-round the loadout is locked, so a paused run cannot swap guns halfway.
 function lockPicks(locked) {
-    for (const chip of [...elGuns.children, ...elReloads.children, ...elTargets.children, ...elMaps.children]) chip.disabled = locked;
+    for (const chip of [...elModes.children, ...elDifficulty.children, ...elBotCount.children, ...elGuns.children, ...elReloads.children, ...elTargets.children, ...elMaps.children]) chip.disabled = locked;
 }
 
 /* ---------- crosshair ---------- */
@@ -3333,6 +3474,10 @@ function updateHint() {
         elHint.textContent = `tap the ${targetKind.id === 'bullseye' ? 'targets' : `${targetKind.label}s`} · tap the gun to inspect it`;
     } else {
         const fire = weapon.auto ? 'hold to spray' : weapon.scope ? 'click to fire · right click to scope' : 'click to fire';
+        if (botsMode()) {
+            elHint.textContent = `wasd to move · space to jump · shift to walk · ${fire}${reloadsOn ? ' · r to reload' : ''} · esc to pause`;
+            return;
+        }
         elHint.textContent = `${fire} · ${reloadsOn ? 'r to reload · ' : ''}f to inspect · esc to pause`;
     }
 }
@@ -3464,6 +3609,11 @@ elStart.addEventListener('click', () => {
 });
 
 elReset.addEventListener('click', () => {
+    if (botsMode()) {
+        remember(BOTS_BEST_KEY, '0');
+        showModeStats();
+        return;
+    }
     best = 0;
     try {
         localStorage.removeItem(STORAGE_KEY);
@@ -3520,6 +3670,20 @@ canvas.addEventListener('pointerdown', (event) => {
     lastTouchAt = performance.now();
     onPress(event);
 });
+
+// WASD and friends, only while a bots round is on. Space would otherwise
+// scroll the page.
+document.addEventListener('keydown', (event) => {
+    const action = KEYMAP[event.code];
+    if (!action || !running || !botsMode()) return;
+    keys[action] = true;
+    event.preventDefault();
+});
+document.addEventListener('keyup', (event) => {
+    const action = KEYMAP[event.code];
+    if (action) keys[action] = false;
+});
+window.addEventListener('blur', clearKeys);
 
 // On a phone there is no R key, so the counter itself is the reload button.
 elAmmo.addEventListener('click', () => startReload());
@@ -3671,9 +3835,71 @@ window.addEventListener('resize', () => {
 });
 requestAnimationFrame(loop);
 
+bots = createBots({
+    scene,
+    camera,
+    floorY: FLOOR_Y,
+    envRoot,
+    glow: GLOW,
+    sound: { burst, tone },
+    el: {
+        health: document.getElementById('aimHealthValue'),
+        healthBox: document.getElementById('aimHealth'),
+        killfeed: document.getElementById('aimKillfeed'),
+        damage: document.getElementById('aimDamage'),
+        death: document.getElementById('aimDeath'),
+    },
+    onKill() {
+        kills++;
+        updateHud();
+    },
+    onDeath() {
+        deaths++;
+        setScope(false);
+        cancelReload();
+        triggerHeld = false;
+        showGun(false);
+        updateHud();
+    },
+    onRespawn() {
+        fillAmmo();
+        updateAmmo();
+        showGun(true);
+    },
+});
+bots.setBounds(mapKind.bounds);
+
+// Mode, difficulty and bot count. Bots mode needs a keyboard, so phones only
+// get the aim trainer.
+function applyMode() {
+    elTitle.textContent = botsMode() ? 'bots' : 'aim trainer';
+    elBotRow.hidden = !botsMode();
+    elTargetRow.hidden = botsMode();
+    showModeStats();
+    updateHint();
+}
+mode = !touchOnly && recall(MODE_KEY) === 'bots' ? 'bots' : 'aim';
+elModes.closest('.aim-pick').hidden = touchOnly;
+buildChips(elModes, MODES, mode, (id) => {
+    mode = id;
+    remember(MODE_KEY, id);
+    applyMode();
+});
+const savedDifficulty = recall(DIFFICULTY_KEY) || 'normal';
+bots.setDifficulty(savedDifficulty);
+buildChips(elDifficulty, DIFFICULTIES, bots.difficulty().id, (id) => {
+    bots.setDifficulty(id);
+    remember(DIFFICULTY_KEY, id);
+});
+const savedCount = BOT_COUNTS.find((c) => c.id === recall(BOT_COUNT_KEY)) || BOT_COUNTS[1];
+bots.setCount(Number(savedCount.id));
+buildChips(elBotCount, BOT_COUNTS, savedCount.id, (id) => {
+    bots.setCount(Number(id));
+    remember(BOT_COUNT_KEY, id);
+});
+
 elStart.disabled = false;
 elStart.textContent = 'start';
-elStatValue.textContent = String(best);
-elStatNote.textContent = best ? `30 seconds · best ${best}` : '30 seconds · no runs yet';
+applyMode();
 loadBoard();
 updateHint();

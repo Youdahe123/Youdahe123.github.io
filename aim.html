@@ -26,9 +26,18 @@
         <!-- Live readout while a run is going. -->
         <div class="aim-hud" id="aimHud" aria-hidden="true" hidden>
             <span class="aim-hud-cell"><b id="aimTime">30.0</b><i>time</i></span>
-            <span class="aim-hud-cell"><b id="aimScore">0</b><i>hits</i></span>
-            <span class="aim-hud-cell"><b id="aimAcc">100%</b><i>accuracy</i></span>
+            <span class="aim-hud-cell"><b id="aimScore">0</b><i id="aimScoreLabel">hits</i></span>
+            <span class="aim-hud-cell"><b id="aimAcc">100%</b><i id="aimAccLabel">accuracy</i></span>
         </div>
+
+        <!-- Bots mode: health bottom left, the kill feed top right, a red flash
+             when hit, and who got you when you go down. -->
+        <div class="aim-health" id="aimHealth" hidden>
+            <span class="aim-health-cross" aria-hidden="true">+</span><b id="aimHealthValue">100</b>
+        </div>
+        <div class="aim-killfeed" id="aimKillfeed" aria-live="polite"></div>
+        <div class="aim-damage" id="aimDamage" aria-hidden="true"></div>
+        <p class="aim-death" id="aimDeath" hidden></p>
 
         <!-- Ammo, bottom right like csgo. Tapping it reloads on a phone. -->
         <div class="aim-ammo" id="aimAmmo" hidden>
@@ -54,6 +63,18 @@
                 <!-- Loadout. The chips are filled in by aim.js from its lists. -->
                 <div class="aim-picks">
                     <div class="aim-pick">
+                        <span class="aim-pick-label" id="aimModeLabel">mode</span>
+                        <div class="aim-chips" id="aimModes" role="radiogroup" aria-labelledby="aimModeLabel"></div>
+                    </div>
+                    <!-- Bots mode only: how good the bots are and how many. -->
+                    <div class="aim-pick" id="aimBotRow" hidden>
+                        <span class="aim-pick-label" id="aimDifficultyLabel">bots</span>
+                        <div class="aim-bot-options">
+                            <div class="aim-chips" id="aimDifficulty" role="radiogroup" aria-labelledby="aimDifficultyLabel"></div>
+                            <div class="aim-chips" id="aimBotCount" role="radiogroup" aria-label="number of bots"></div>
+                        </div>
+                    </div>
+                    <div class="aim-pick">
                         <span class="aim-pick-label" id="aimGunLabel">gun</span>
                         <div class="aim-chips" id="aimGuns" role="radiogroup" aria-labelledby="aimGunLabel"></div>
                     </div>
@@ -61,7 +82,7 @@
                         <span class="aim-pick-label" id="aimReloadLabel">reloading</span>
                         <div class="aim-chips" id="aimReloads" role="radiogroup" aria-labelledby="aimReloadLabel"></div>
                     </div>
-                    <div class="aim-pick">
+                    <div class="aim-pick" id="aimTargetRow">
                         <span class="aim-pick-label" id="aimTargetLabel">target</span>
                         <div class="aim-chips" id="aimTargets" role="radiogroup" aria-labelledby="aimTargetLabel"></div>
                     </div>
