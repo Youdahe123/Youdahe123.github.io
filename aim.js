@@ -16,6 +16,7 @@ const XH_KEY = 'aim.crosshair';
 const XH_COLOR_KEY = 'aim.crosshairColor';
 const SOUND_KEY = 'aim.sound';
 const SENS_KEY = 'aim.sensitivity';
+const RELOAD_KEY = 'aim.reload';
 
 // The arena is a box the player stands in the middle of. Targets spawn on a
 // shell in front of them, never behind, so a round is never spent spinning.
@@ -80,6 +81,8 @@ const elAmmo = document.getElementById('aimAmmo');
 const elAmmoGun = document.getElementById('aimAmmoGun');
 const elAmmoMag = document.getElementById('aimAmmoMag');
 const elAmmoFill = document.getElementById('aimAmmoFill');
+const elAmmoReserve = document.getElementById('aimAmmoReserve');
+const elReloads = document.getElementById('aimReloads');
 const elSound = document.getElementById('aimSound');
 const elSensRange = document.getElementById('aimSensRange');
 const elSensValue = document.getElementById('aimSensValue');
@@ -2375,6 +2378,14 @@ function updateCasings(now, dt) {
 // Rounds in the magazine for each gun, refilled at the start of a round.
 // Reserve is endless: this is an aim trainer, not an economy.
 const ammo = {};
+
+// Reloading is the harder way to play and the default. Off, every magazine
+// is bottomless and the gun never reloads.
+const RELOAD_MODES = [
+    { id: 'on', label: 'on · harder' },
+    { id: 'off', label: 'off' },
+];
+let reloadsOn = true;
 let reloadStart = 0;
 let reloadLength = 0;
 let reloadFrom = 0;
@@ -2390,7 +2401,7 @@ function fillAmmo() {
 }
 
 function startReload() {
-    if (!running || reloadStart || ammo[weapon.id] >= weapon.mag) return;
+    if (!reloadsOn || !running || reloadStart || ammo[weapon.id] >= weapon.mag) return;
     if (scoped) setScope(false);
     rezoom = false;
     chamberStart = 0;
@@ -2436,8 +2447,9 @@ function tickAmmo(now) {
 function updateAmmo() {
     const left = ammo[weapon.id] ?? weapon.mag;
     elAmmoGun.textContent = weapon.label;
-    elAmmoMag.textContent = String(left);
-    elAmmo.classList.toggle('is-low', left <= Math.ceil(weapon.mag * 0.2));
+    elAmmoMag.textContent = reloadsOn ? String(left) : '∞';
+    elAmmoReserve.hidden = !reloadsOn;
+    elAmmo.classList.toggle('is-low', reloadsOn && left <= Math.ceil(weapon.mag * 0.2));
     elAmmo.classList.toggle('is-reloading', !!reloadStart);
     const progress = reloadStart ? clamp((performance.now() - reloadStart) / reloadLength, 0, 1) : 0;
     elAmmoFill.style.width = `${progress * 100}%`;
@@ -2962,13 +2974,13 @@ function fire(ndc) {
         else return;
     }
     if (chamberStart) return;
-    if (ammo[weapon.id] <= 0) {
+    if (reloadsOn && ammo[weapon.id] <= 0) {
         lastShotAt = now;
         tick(0, 1800, 0.35);
         startReload();
         return;
     }
-    ammo[weapon.id]--;
+    if (reloadsOn) ammo[weapon.id]--;
     (SHOT_SOUNDS[weapon.id] || SHOT_SOUNDS.ar)();
 
     // Shots fired close together wander further from where the player aimed,
@@ -3122,7 +3134,7 @@ function endRound() {
     elStart.textContent = 'go again';
     setNote('');
 
-    lastRun = hits > 0 ? { score: hits, shots, gun: weapon.id } : null;
+    lastRun = hits > 0 ? { score: hits, shots, gun: weapon.id, reload: reloadsOn } : null;
     lockPicks(false);
     elSaveOpen.hidden = !lastRun || !boardOnline;
 }
@@ -3261,7 +3273,7 @@ function buildChips(container, options, selected, onPick) {
 
 // Mid-round the loadout is locked, so a paused run cannot swap guns halfway.
 function lockPicks(locked) {
-    for (const chip of [...elGuns.children, ...elTargets.children, ...elMaps.children]) chip.disabled = locked;
+    for (const chip of [...elGuns.children, ...elReloads.children, ...elTargets.children, ...elMaps.children]) chip.disabled = locked;
 }
 
 /* ---------- crosshair ---------- */
@@ -3320,7 +3332,7 @@ function updateHint() {
         elHint.textContent = `tap the ${targetKind.id === 'bullseye' ? 'targets' : `${targetKind.label}s`} · tap the gun to inspect it`;
     } else {
         const fire = weapon.auto ? 'hold to spray' : weapon.scope ? 'click to fire · right click to scope' : 'click to fire';
-        elHint.textContent = `${fire} · r to reload · f to inspect · esc to pause`;
+        elHint.textContent = `${fire} · ${reloadsOn ? 'r to reload · ' : ''}f to inspect · esc to pause`;
     }
 }
 
@@ -3353,7 +3365,8 @@ function renderBoard(scores, mine) {
         const gunName = WEAPONS.find((w) => w.id === entry.gun);
         if (gunName) {
             const tag = document.createElement('small');
-            tag.textContent = ` ${gunName.label}`;
+            // Scores set without reloading are marked, since they had it easier.
+            tag.textContent = ` ${gunName.label}${entry.reload === false ? ' · no reload' : ''}`;
             name.append(tag);
         }
 
@@ -3417,7 +3430,7 @@ async function saveScore(event) {
         const res = await fetch(AIM_API, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ name, score: lastRun.score, shots: lastRun.shots, gun: lastRun.gun }),
+            body: JSON.stringify({ name, score: lastRun.score, shots: lastRun.shots, gun: lastRun.gun, reload: lastRun.reload }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'could not save');
@@ -3605,6 +3618,12 @@ buildChips(elCrosshairs, CROSSHAIRS, xhStyle, (id) => {
 });
 buildSwatches();
 applyCrosshair();
+reloadsOn = recall(RELOAD_KEY) !== 'off';
+buildChips(elReloads, RELOAD_MODES, reloadsOn ? 'on' : 'off', (id) => {
+    reloadsOn = id === 'on';
+    remember(RELOAD_KEY, id);
+    updateHint();
+});
 buildChips(elMaps, MAPS, mapKind.id, (id) => {
     selectMap(id);
     remember(MAP_KEY, id);

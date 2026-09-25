@@ -33,7 +33,7 @@
         <!-- Ammo, bottom right like csgo. Tapping it reloads on a phone. -->
         <div class="aim-ammo" id="aimAmmo" hidden>
             <span class="aim-ammo-gun" id="aimAmmoGun">plasma rifle</span>
-            <span class="aim-ammo-count"><b id="aimAmmoMag">40</b><i>/ &infin;</i></span>
+            <span class="aim-ammo-count"><b id="aimAmmoMag">40</b><i id="aimAmmoReserve">/ &infin;</i></span>
             <span class="aim-ammo-bar" aria-hidden="true"><span id="aimAmmoFill"></span></span>
         </div>
 
@@ -56,6 +56,10 @@
                     <div class="aim-pick">
                         <span class="aim-pick-label" id="aimGunLabel">gun</span>
                         <div class="aim-chips" id="aimGuns" role="radiogroup" aria-labelledby="aimGunLabel"></div>
+                    </div>
+                    <div class="aim-pick">
+                        <span class="aim-pick-label" id="aimReloadLabel">reloading</span>
+                        <div class="aim-chips" id="aimReloads" role="radiogroup" aria-labelledby="aimReloadLabel"></div>
                     </div>
                     <div class="aim-pick">
                         <span class="aim-pick-label" id="aimTargetLabel">target</span>

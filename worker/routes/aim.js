@@ -56,8 +56,16 @@ function rank(a, b) {
 }
 
 function view(entry) {
-  const { id, name, score, shots, gun, at } = entry;
-  return { id, name, score, accuracy: shots ? Math.round((score / shots) * 100) : 100, gun: gun || 'plasma', at };
+  const { id, name, score, shots, gun, reload, at } = entry;
+  return {
+    id,
+    name,
+    score,
+    accuracy: shots ? Math.round((score / shots) * 100) : 100,
+    gun: gun || 'plasma',
+    reload: reload !== false,
+    at,
+  };
 }
 
 async function readBoard(env) {
@@ -106,7 +114,9 @@ export default async function handler(request, env) {
   // transactions, and two saves in the same instant losing one is acceptable
   // for a game on a personal site.
   const gun = GUNS.has(body?.gun) ? body.gun : 'plasma';
-  const entry = { id: crypto.randomUUID().slice(0, 8), name, score, shots, gun, at: Date.now() };
+  // Whether the run had reloading on. Missing means on, the harder default.
+  const reload = body?.reload !== false;
+  const entry = { id: crypto.randomUUID().slice(0, 8), name, score, shots, gun, reload, at: Date.now() };
   const board = [...(await readBoard(env)), entry].sort(rank).slice(0, KEEP);
   await Promise.all([
     writeJSON(env, KEY, board),
