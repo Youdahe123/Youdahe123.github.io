@@ -5064,9 +5064,24 @@ h1.post-full-title::before {
    The arena is the page here: a full-window canvas with the panel and the
    readout floating over it, all in the same ink palette as everything else. */
 
+/* The arena is always dark, so the page around it is too, whatever the site
+   theme. Redefining the palette here, on body, beats the light values set on
+   the root and keeps every aim rule below readable against the scene. */
 .aim-body {
+    --ink-bg: #121312;
+    --ink-fg: #f0e9dd;
+    --ink-muted: rgba(240, 233, 221, 0.62);
+    --ink-faint: rgba(240, 233, 221, 0.38);
+    --ink-rule: rgba(240, 233, 221, 0.14);
+    --ink-panel: rgba(240, 233, 221, 0.035);
+    --ink-blood: var(--ink-fg);
+    --ink-gold: var(--ink-faint);
+    --bg-color: var(--ink-bg);
+    --text-color: var(--ink-fg);
+    color-scheme: dark;
     overflow: hidden;
     background: var(--ink-bg);
+    color: var(--ink-fg);
 }
 
 .aim-stage {
