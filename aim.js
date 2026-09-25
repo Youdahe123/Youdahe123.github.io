@@ -1,22 +1,26 @@
-// Aim trainer: a first-person arena where the targets are cartoon beavers,
-// modelled out of primitives rather than loaded as art, and the player holds an
-// alien plasma rifle rendered as a proper first-person viewmodel. Thirty
-// seconds, one high score, kept in this browser. three.js does the drawing; the
-// pointer lock, the spawning and the scoring are all here.
+// Aim trainer: a first-person arena where the targets are cartoon animals (or a
+// plain bullseye), modelled out of primitives rather than loaded as art, and the
+// player picks a gun from a small loadout rendered as a proper first-person
+// viewmodel. Thirty seconds, one high score, kept in this browser. three.js
+// does the drawing; the pointer lock, the spawning and the scoring are all here.
 import * as THREE from './vendor/three/three.module.min.js';
 
 const ROUND_MS = 30000;
 const TARGET_COUNT = 5;
 const STORAGE_KEY = 'aim.best';
+const NAME_KEY = 'aim.name';
+const GUN_KEY = 'aim.gun';
+const TARGET_KEY = 'aim.target';
 
 // The arena is a box the player stands in the middle of. Targets spawn on a
 // shell in front of them, never behind, so a round is never spent spinning.
 const ROOM = { w: 38, h: 16, d: 38 };
 const SPAWN = { minR: 10, maxR: 15, yMin: -2.4, yMax: 3.6, arc: Math.PI * 0.62 };
 
-// A beaver is not a disc, so the surface a shot is scored against is a sphere
-// this big around the middle of one. It matches the halo ring drawn behind the
-// beaver, and it keeps the difficulty exactly where the old photo disc had it.
+// A target is not a disc, so the surface a shot is scored against is a sphere
+// this big around the middle of one. It matches the halo ring drawn behind it,
+// and every model is built to fill it, so the pick is cosmetic and the
+// difficulty stays the same whichever one is up.
 const HIT_RADIUS = 0.95;
 
 const LOOK_SPEED = 0.0022;
@@ -45,6 +49,15 @@ const elStart = document.getElementById('aimStart');
 const elReset = document.getElementById('aimReset');
 const elHint = document.getElementById('aimHint');
 const elNote = document.getElementById('aimNote');
+const elSaveOpen = document.getElementById('aimSaveOpen');
+const elSave = document.getElementById('aimSave');
+const elName = document.getElementById('aimName');
+const elSaveBtn = document.getElementById('aimSaveBtn');
+const elSaveMsg = document.getElementById('aimSaveMsg');
+const elBoard = document.getElementById('aimBoard');
+const elBoardEmpty = document.getElementById('aimBoardEmpty');
+const elGuns = document.getElementById('aimGuns');
+const elTargets = document.getElementById('aimTargets');
 
 // Touch devices have no pointer to lock, so they aim by tapping the target
 // directly and the copy changes to match.
@@ -60,6 +73,9 @@ let endsAt = 0;
 let hits = 0;
 let shots = 0;
 let best = 0;
+// The last finished round, which is what the save form submits. Cleared once it
+// is on the board so the same run cannot be saved twice.
+let lastRun = null;
 
 try {
     best = Number(localStorage.getItem(STORAGE_KEY)) || 0;
@@ -98,10 +114,13 @@ function glowTexture() {
 
 const GLOW = glowTexture();
 
-// One unit sphere and one unit box, scaled per part. Every beaver shares them,
-// so five beavers cost five draw calls per part rather than five geometries.
+// One unit sphere and one unit box, scaled per part. Every target shares them,
+// so five targets cost five draw calls per part rather than five geometries.
 const UNIT_BALL = new THREE.SphereGeometry(1, 20, 14);
 const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
+// Apex along +Y, so a beak turned by a quarter about X points at the camera.
+const UNIT_CONE = new THREE.ConeGeometry(1, 1, 12);
+const UNIT_DISC = new THREE.CylinderGeometry(1, 1, 0.04, 40);
 
 /* ---------- scene ---------- */
 
@@ -221,20 +240,139 @@ function makeBeaver() {
     return beaver;
 }
 
+/* ---------- the rest of the lineup ---------- */
+
+const toon = (color) => new THREE.MeshToonMaterial({ color });
+const FEATHER = { white: toon(0xf1ece2), red: toon(0xc2412f), orange: toon(0xe39a3b) };
+const FROG = { skin: toon(0x6f9a45), dark: toon(0x4c7030), belly: toon(0xc9d38e) };
+const PENGUIN = { coat: toon(0x3a3f47), belly: toon(0xf1ece2) };
+const RINGS = { red: toon(0xb8432f), cream: toon(0xf0e9dd) };
+
+function beak(material, scale, position) {
+    const mesh = part(UNIT_CONE, material, scale, position);
+    mesh.rotation.x = Math.PI / 2;
+    return mesh;
+}
+
+// The one every csgo player has shot at least once on the way to a site.
+function makeChicken() {
+    const chicken = new THREE.Group();
+
+    for (const [x, tilt] of [[-0.12, 0.3], [0, 0], [0.12, -0.3]]) {
+        const feather = part(UNIT_BALL, FEATHER.white, [0.1, 0.28, 0.06], [x, -0.02, -0.42]);
+        feather.rotation.set(-0.6, 0, tilt);
+        chicken.add(feather);
+    }
+
+    chicken.add(part(UNIT_BALL, FEATHER.white, [0.5, 0.46, 0.56], [0, -0.28, 0]));
+    chicken.add(part(UNIT_BALL, FEATHER.white, [0.27, 0.3, 0.27], [0, 0.3, 0.2]));
+
+    for (const side of [-1, 1]) {
+        chicken.add(part(UNIT_BALL, FEATHER.white, [0.1, 0.28, 0.38], [side * 0.47, -0.24, -0.02]));
+        chicken.add(part(UNIT_BALL, FUR.white, [0.07, 0.07, 0.07], [side * 0.14, 0.36, 0.4]));
+        chicken.add(part(UNIT_BALL, FUR.pupil, [0.04, 0.04, 0.04], [side * 0.15, 0.36, 0.46]));
+        chicken.add(part(UNIT_BOX, FEATHER.orange, [0.04, 0.24, 0.04], [side * 0.16, -0.8, 0.02]));
+        chicken.add(part(UNIT_BOX, FEATHER.orange, [0.1, 0.03, 0.16], [side * 0.16, -0.92, 0.08]));
+    }
+
+    for (const i of [-1, 0, 1]) {
+        chicken.add(part(UNIT_BALL, FEATHER.red, [0.07, 0.1, 0.07], [0, 0.6 + (i === 0 ? 0.03 : 0), 0.2 + i * 0.08]));
+    }
+    chicken.add(beak(FEATHER.orange, [0.07, 0.16, 0.07], [0, 0.28, 0.5]));
+    chicken.add(part(UNIT_BALL, FEATHER.red, [0.05, 0.09, 0.05], [0, 0.15, 0.44]));
+
+    return chicken;
+}
+
+function makeFrog() {
+    const frog = new THREE.Group();
+
+    frog.add(part(UNIT_BALL, FROG.skin, [0.62, 0.44, 0.5], [0, -0.3, 0]));
+    frog.add(part(UNIT_BALL, FROG.belly, [0.42, 0.3, 0.2], [0, -0.36, 0.36]));
+    frog.add(part(UNIT_BALL, FROG.skin, [0.5, 0.32, 0.42], [0, 0.12, 0.14]));
+
+    for (const side of [-1, 1]) {
+        frog.add(part(UNIT_BALL, FROG.skin, [0.17, 0.17, 0.17], [side * 0.26, 0.4, 0.18]));
+        frog.add(part(UNIT_BALL, FUR.white, [0.12, 0.12, 0.12], [side * 0.26, 0.44, 0.28]));
+        frog.add(part(UNIT_BALL, FUR.pupil, [0.07, 0.05, 0.05], [side * 0.27, 0.44, 0.39]));
+        frog.add(part(UNIT_BALL, FROG.dark, [0.2, 0.14, 0.34], [side * 0.5, -0.58, 0.06]));
+        frog.add(part(UNIT_BALL, FROG.dark, [0.12, 0.06, 0.16], [side * 0.26, -0.72, 0.36]));
+    }
+
+    frog.add(part(UNIT_BOX, FUR.nose, [0.36, 0.02, 0.02], [0, 0.02, 0.5]));
+    return frog;
+}
+
+function makePenguin() {
+    const penguin = new THREE.Group();
+
+    penguin.add(part(UNIT_BALL, PENGUIN.coat, [0.52, 0.8, 0.46], [0, -0.1, 0]));
+    penguin.add(part(UNIT_BALL, PENGUIN.belly, [0.3, 0.5, 0.14], [0, -0.22, 0.36]));
+    penguin.add(part(UNIT_BALL, PENGUIN.belly, [0.2, 0.14, 0.1], [0, 0.4, 0.38]));
+
+    for (const side of [-1, 1]) {
+        penguin.add(part(UNIT_BALL, FUR.white, [0.07, 0.07, 0.07], [side * 0.12, 0.44, 0.42]));
+        penguin.add(part(UNIT_BALL, FUR.pupil, [0.04, 0.04, 0.04], [side * 0.125, 0.44, 0.48]));
+        const flipper = part(UNIT_BALL, PENGUIN.coat, [0.1, 0.42, 0.18], [side * 0.52, -0.12, 0]);
+        flipper.rotation.z = side * 0.25;
+        penguin.add(flipper);
+        penguin.add(part(UNIT_BALL, FEATHER.orange, [0.14, 0.05, 0.2], [side * 0.16, -0.9, 0.16]));
+    }
+
+    penguin.add(beak(FEATHER.orange, [0.07, 0.16, 0.06], [0, 0.34, 0.5]));
+    return penguin;
+}
+
+// The classic: rings stacked face-on, each a hair in front of the last.
+function makeBullseye() {
+    const board = new THREE.Group();
+    [0.92, 0.74, 0.56, 0.38, 0.2, 0.08].forEach((radius, i) => {
+        const ring = new THREE.Mesh(UNIT_DISC, i % 2 ? RINGS.red : RINGS.cream);
+        ring.scale.set(radius, 1, radius);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.z = i * 0.012;
+        board.add(ring);
+    });
+    return board;
+}
+
+const TARGETS = [
+    { id: 'beaver', label: 'beaver', build: makeBeaver },
+    { id: 'chicken', label: 'chicken', build: makeChicken },
+    { id: 'frog', label: 'frog', build: makeFrog },
+    { id: 'penguin', label: 'penguin', build: makePenguin },
+    { id: 'bullseye', label: 'bullseye', build: makeBullseye },
+];
+
+let targetKind = TARGETS[0];
+
 function makeTarget() {
     const target = new THREE.Group();
 
     // A ring the size of the collider: it tells the player where the scored
-    // edge is, and it gives the beaver something to read against in a dark room.
+    // edge is, and it gives the target something to read against in a dark room.
     const halo = new THREE.Mesh(HALO_GEOMETRY, HALO_MATERIAL);
     halo.position.z = -0.5;
     target.add(halo);
 
-    target.add(makeBeaver());
+    target.userData.model = targetKind.build();
+    target.add(target.userData.model);
     target.add(new THREE.Mesh(COLLIDER_GEOMETRY, COLLIDER_MATERIAL));
 
     placeTarget(target);
     return target;
+}
+
+// Swaps the model inside each target in place. The halo, the collider and where
+// each one is standing all stay put, so a switch mid-menu is seamless.
+function selectTarget(id) {
+    targetKind = TARGETS.find((t) => t.id === id) || TARGETS[0];
+    if (!targetGroup) return;
+    for (const target of targetGroup.children) {
+        target.remove(target.userData.model);
+        target.userData.model = targetKind.build();
+        target.add(target.userData.model);
+    }
 }
 
 // Somewhere on a shell in front of the player, and not on top of a target that
@@ -282,7 +420,7 @@ function updateTargets(now) {
 
 /* ---------- hit bursts ---------- */
 
-// A beaver respawns the instant it is shot, so the confirmation has to be left
+// A target respawns the instant it is shot, so the confirmation has to be left
 // behind at the old spot: a ring that expands and fades where it was standing.
 const BURST_COUNT = 8;
 const bursts = [];
@@ -342,13 +480,16 @@ function updateBursts(now) {
     }
 }
 
-/* ---------- the rifle ---------- */
+/* ---------- the guns ---------- */
 
 // The viewmodel is its own scene drawn over the arena with the depth buffer
 // cleared between the two passes. That is the standard first-person trick: the
 // gun can sit centimetres from the lens without clipping through a wall, and it
 // keeps its own lighting so the metal does not go flat when the player turns.
+// Every gun in the loadout is built once up front; picking one just swaps which
+// is visible and which muzzle the flash and the tracer come out of.
 let viewScene, viewCamera, gun, muzzle, flash, flashLight, bolt, boltPivot;
+const guns = {};
 let boltStart = 0;
 let flashStart = 0;
 let inspectStart = 0;
@@ -358,14 +499,39 @@ const sway = { x: 0, y: 0 };
 const lookDelta = { x: 0, y: 0 };
 const glowParts = [];
 
-// The rifle is modelled at roughly a metre long and then held at a fraction of
-// that, which is the usual viewmodel trick: the parts stay easy to place in
-// round numbers and one scale sets how much of the screen the gun eats.
-const GUN_SCALE = 0.38;
+// Firing state: when the last round left, how many have gone in a row (which is
+// what spread grows with), and whether the button is down for automatic fire.
+let lastShotAt = -Infinity;
+let streak = 0;
+let triggerHeld = false;
 
-// Where the rifle rests, and where it is held when the player inspects it.
-const HOME = { pos: [0.3, -0.26, -0.72], rot: [0.05, 0.14, 0.05] };
-const INSPECT = { pos: [0.06, -0.16, -0.58], rot: [0.2, -1.0, -0.34] };
+// Between rounds the gun is shown off in the middle of the menu instead of
+// held. It floats in the gap between the panel and the board.
+let showcase = false;
+let showcaseX = 0.06;
+let viewAmbient, showcaseLight, showcaseGlow;
+
+// The middle of the gap between the panel and the board, in screen units, read
+// off the layout so the gun stays centred in it at any window size.
+function measureShowcase() {
+    const left = document.querySelector('.aim-panel').getBoundingClientRect().right;
+    const right = document.querySelector('.aim-side').getBoundingClientRect().left;
+    const box = stage.getBoundingClientRect();
+    showcaseX = (((left + right) / 2 - box.left) / box.width) * 2 - 1;
+}
+
+// The guns are modelled at roughly a metre and held at a fraction of that, the
+// usual viewmodel trick: parts stay easy to place in round numbers and one
+// scale sets how much of the screen each gun eats. Rifles sit out at the hip,
+// handguns closer in and nearer the middle.
+const RIFLE_HOLD = {
+    home: { pos: [0.3, -0.26, -0.72], rot: [0.05, 0.14, 0.05] },
+    inspect: { pos: [0.06, -0.16, -0.58], rot: [0.2, -1.0, -0.34] },
+};
+const PISTOL_HOLD = {
+    home: { pos: [0.22, -0.2, -0.58], rot: [0.04, 0.1, 0.03] },
+    inspect: { pos: [0.04, -0.12, -0.5], rot: [0.2, -1.0, -0.34] },
+};
 
 function metal(color, roughness, metalness) {
     return new THREE.MeshStandardMaterial({ color, roughness, metalness });
@@ -381,38 +547,68 @@ function energy(color, intensity) {
     });
 }
 
-function buildViewmodel() {
-    viewScene = new THREE.Scene();
-    viewCamera = new THREE.PerspectiveCamera(60, 1, 0.01, 40);
+// Shared finishes for the real-world guns. Metalness stays moderate because
+// there is no environment map to reflect, and fully metallic parts go black.
+const GUNMETAL = metal(0x565a5e, 0.4, 0.55);
+const POLYMER = metal(0x34363a, 0.62, 0.2);
+const STEEL = metal(0xa29f96, 0.32, 0.65);
+const CHROME = metal(0xd2cfc6, 0.24, 0.7);
+const WOOD = metal(0x6e4424, 0.62, 0.05);
 
-    viewScene.add(new THREE.AmbientLight(INK, 1.2));
-    const key = new THREE.DirectionalLight(INK, 2.2);
-    key.position.set(-0.6, 1, 0.4);
-    viewScene.add(key);
-    const fill = new THREE.DirectionalLight(0xa67d43, 1.1);
-    fill.position.set(1, -0.4, 0.6);
-    viewScene.add(fill);
+function box(g, material, scale, position, rotation) {
+    const mesh = new THREE.Mesh(UNIT_BOX, material);
+    mesh.scale.set(scale[0], scale[1], scale[2]);
+    mesh.position.set(position[0], position[1], position[2]);
+    if (rotation) mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
+    g.add(mesh);
+    return mesh;
+}
 
-    gun = buildGun();
-    gun.visible = false;
-    viewScene.add(gun);
+// A cylinder laid along the barrel axis.
+function tube(g, material, radius, length, position, segments = 14) {
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, segments), material);
+    mesh.rotation.x = Math.PI / 2;
+    mesh.position.set(position[0], position[1], position[2]);
+    g.add(mesh);
+    return mesh;
+}
 
-    // The bolt lives in the scene rather than on the gun: once it is away it
-    // flies straight while the rifle is still recoiling.
-    boltPivot = new THREE.Group();
-    boltPivot.visible = false;
-    bolt = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.024, 0.012, 0.6, 8),
-        new THREE.MeshBasicMaterial({
-            color: 0xffe9bd,
-            transparent: true,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-        })
-    );
-    bolt.rotation.x = Math.PI / 2; // length along the pivot's +Z, which lookAt aims
-    boltPivot.add(bolt);
-    viewScene.add(boltPivot);
+// The muzzle is a marker, not a mesh: the flash hangs off it and the tracer
+// starts from wherever it has ended up after the recoil.
+function attachMuzzle(g, position, color) {
+    const point = new THREE.Object3D();
+    point.position.set(position[0], position[1], position[2]);
+    g.add(point);
+
+    const burst = new THREE.Group();
+    burst.visible = false;
+    const puff = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: GLOW,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+    }));
+    puff.scale.setScalar(0.5);
+    burst.add(puff);
+    const spark = new THREE.Mesh(UNIT_BALL, new THREE.MeshBasicMaterial({
+        color: 0xfff3da,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+    }));
+    spark.scale.setScalar(0.07);
+    burst.add(spark);
+    burst.userData.puff = puff;
+    burst.userData.spark = spark;
+    point.add(burst);
+
+    const light = new THREE.PointLight(color, 0, 3);
+    light.position.set(0, 0, -0.2);
+    point.add(light);
+
+    g.userData.muzzle = point;
+    g.userData.flash = burst;
+    g.userData.flashLight = light;
 }
 
 // An alien plasma rifle: a slim hex receiver, a caged muzzle with three prongs
@@ -420,7 +616,7 @@ function buildViewmodel() {
 // swept blades at the back. All primitives, all in the page palette. The player
 // sees it from behind and slightly above, so the detail sits on the top and the
 // rear where it will actually be looked at.
-function buildGun() {
+function buildPlasma() {
     const shell = metal(0x26282a, 0.42, 0.72);
     const plate = metal(0x8f8a7e, 0.48, 0.45);
     const dark = metal(0x141514, 0.6, 0.5);
@@ -583,42 +779,220 @@ function buildGun() {
     heel.position.set(0, -0.02, 0.54);
     g.add(heel);
 
-    // The muzzle is a marker, not a mesh: the flash hangs off it and the bolt
-    // starts from wherever it has ended up after the recoil.
-    muzzle = new THREE.Object3D();
-    muzzle.position.set(0, 0, -1.3);
-    g.add(muzzle);
+    attachMuzzle(g, [0, 0, -1.3], AMBER);
+    return g;
+}
 
-    flash = new THREE.Group();
-    flash.visible = false;
-    const puff = new THREE.Sprite(new THREE.SpriteMaterial({
+// An M4-pattern carbine: flat-top upper with a full-length rail, a handguard,
+// a front sight post, a slightly curved magazine and a collapsible stock.
+function buildRifle() {
+    const g = new THREE.Group();
+
+    box(g, GUNMETAL, [0.1, 0.11, 0.6], [0, 0.03, -0.08]);
+    box(g, GUNMETAL, [0.095, 0.09, 0.34], [0, -0.07, -0.02]);
+    box(g, POLYMER, [0.004, 0.04, 0.12], [0.052, 0.03, -0.04]);
+    box(g, GUNMETAL, [0.14, 0.02, 0.04], [0, 0.08, 0.2]);
+
+    box(g, POLYMER, [0.12, 0.12, 0.52], [0, 0.03, -0.64]);
+    for (const side of [-1, 1]) box(g, GUNMETAL, [0.012, 0.03, 0.48], [side * 0.066, 0.03, -0.64]);
+
+    box(g, GUNMETAL, [0.06, 0.025, 1.08], [0, 0.1, -0.36]);
+    for (let i = 0; i < 12; i++) box(g, POLYMER, [0.064, 0.012, 0.03], [0, 0.118, 0.12 - i * 0.085]);
+    box(g, GUNMETAL, [0.05, 0.06, 0.06], [0, 0.14, 0.14]);
+    box(g, GUNMETAL, [0.03, 0.14, 0.04], [0, 0.1, -0.94]);
+
+    tube(g, GUNMETAL, 0.022, 0.34, [0, 0.03, -1.06]);
+    tube(g, POLYMER, 0.032, 0.1, [0, 0.03, -1.26]);
+
+    box(g, POLYMER, [0.075, 0.2, 0.13], [0, -0.2, -0.14], [-0.1, 0, 0]);
+    box(g, POLYMER, [0.075, 0.16, 0.13], [0, -0.36, -0.2], [-0.32, 0, 0]);
+
+    box(g, POLYMER, [0.08, 0.26, 0.12], [0, -0.22, 0.17], [0.32, 0, 0]);
+    box(g, GUNMETAL, [0.02, 0.012, 0.16], [0, -0.14, 0.06]);
+    box(g, STEEL, [0.016, 0.06, 0.02], [0, -0.1, 0.07]);
+
+    tube(g, GUNMETAL, 0.035, 0.3, [0, 0, 0.36]);
+    box(g, POLYMER, [0.08, 0.16, 0.28], [0, -0.03, 0.58]);
+    box(g, POLYMER, [0.085, 0.2, 0.03], [0, -0.04, 0.72]);
+
+    attachMuzzle(g, [0, 0.03, -1.32], 0xffc36b);
+    return g;
+}
+
+// A striker-fired polymer pistol: a boxy slide with rear serrations over a
+// short frame, three-dot sights and a steep grip.
+function buildPistol() {
+    const g = new THREE.Group();
+
+    box(g, GUNMETAL, [0.075, 0.085, 0.46], [0, 0.05, -0.2]);
+    for (let i = 0; i < 5; i++) box(g, POLYMER, [0.078, 0.06, 0.008], [0, 0.05, -i * 0.02]);
+    box(g, POLYMER, [0.07, 0.05, 0.4], [0, -0.02, -0.2]);
+    tube(g, POLYMER, 0.014, 0.01, [0, 0.05, -0.432]);
+
+    box(g, STEEL, [0.012, 0.018, 0.018], [0, 0.1, -0.4]);
+    box(g, STEEL, [0.05, 0.02, 0.02], [0, 0.1, 0]);
+
+    box(g, POLYMER, [0.07, 0.26, 0.13], [0, -0.17, 0.03], [0.28, 0, 0]);
+    box(g, POLYMER, [0.02, 0.012, 0.12], [0, -0.1, -0.12]);
+    box(g, POLYMER, [0.02, 0.06, 0.012], [0, -0.07, -0.18]);
+    box(g, STEEL, [0.014, 0.045, 0.016], [0, -0.06, -0.1]);
+
+    attachMuzzle(g, [0, 0.05, -0.46], 0xffc36b);
+    return g;
+}
+
+// The Desert Eagle: all chrome, a long slide under the heavy triangular barrel
+// with its grooved top, and an exposed hammer. Big on purpose.
+function buildDeagle() {
+    const g = new THREE.Group();
+
+    box(g, CHROME, [0.095, 0.1, 0.56], [0, 0.06, -0.24]);
+    for (let i = 0; i < 6; i++) box(g, STEEL, [0.098, 0.07, 0.008], [0, 0.06, -0.01 - i * 0.018]);
+    box(g, CHROME, [0.07, 0.05, 0.46], [0, 0.13, -0.3]);
+    box(g, POLYMER, [0.02, 0.006, 0.44], [0, 0.158, -0.3]);
+    box(g, STEEL, [0.09, 0.06, 0.46], [0, -0.02, -0.24]);
+    tube(g, POLYMER, 0.02, 0.01, [0, 0.1, -0.53]);
+
+    box(g, STEEL, [0.014, 0.022, 0.02], [0, 0.17, -0.5]);
+    box(g, STEEL, [0.05, 0.024, 0.02], [0, 0.17, -0.08]);
+    box(g, STEEL, [0.03, 0.05, 0.03], [0, 0.11, 0.06], [-0.4, 0, 0]);
+
+    box(g, POLYMER, [0.085, 0.3, 0.14], [0, -0.2, 0.04], [0.22, 0, 0]);
+    box(g, STEEL, [0.02, 0.012, 0.14], [0, -0.1, -0.14]);
+    box(g, STEEL, [0.02, 0.07, 0.012], [0, -0.07, -0.21]);
+    box(g, STEEL, [0.014, 0.05, 0.016], [0, -0.06, -0.11]);
+
+    attachMuzzle(g, [0, 0.1, -0.54], 0xffb456);
+    return g;
+}
+
+// A six-shot revolver: a long barrel over a full underlug, a cylinder that
+// turns a chamber per shot, a spur hammer and a wooden grip.
+function buildRevolver() {
+    const g = new THREE.Group();
+
+    box(g, STEEL, [0.07, 0.14, 0.22], [0, 0.02, -0.02]);
+    box(g, STEEL, [0.06, 0.03, 0.24], [0, 0.12, -0.02]);
+
+    const drum = new THREE.Group();
+    drum.position.set(0, 0.03, -0.02);
+    tube(drum, GUNMETAL, 0.09, 0.16, [0, 0, 0], 18);
+    for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        tube(drum, POLYMER, 0.018, 0.006, [Math.cos(a) * 0.055, Math.sin(a) * 0.055, -0.082], 10);
+    }
+    g.add(drum);
+    g.userData.drum = drum;
+    g.userData.drumAngle = 0;
+
+    tube(g, STEEL, 0.03, 0.56, [0, 0.085, -0.4]);
+    box(g, STEEL, [0.045, 0.05, 0.5], [0, 0.04, -0.42]);
+    box(g, STEEL, [0.012, 0.04, 0.05], [0, 0.13, -0.64]);
+    box(g, STEEL, [0.025, 0.07, 0.04], [0, 0.12, 0.12], [-0.5, 0, 0]);
+
+    box(g, WOOD, [0.075, 0.28, 0.14], [0, -0.16, 0.14], [0.35, 0, 0]);
+    const guard = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.011, 8, 16, Math.PI * 1.15), STEEL);
+    guard.rotation.set(0, Math.PI / 2, -0.4);
+    guard.position.set(0, -0.08, 0.04);
+    g.add(guard);
+    box(g, STEEL, [0.014, 0.05, 0.016], [0, -0.08, 0.05]);
+
+    attachMuzzle(g, [0, 0.085, -0.7], 0xffc36b);
+    return g;
+}
+
+// How each gun handles. Cooldown is the fastest it will fire again, spread is
+// how far consecutive shots wander from the crosshair (in screen units), punch
+// is how far each shot kicks the view up. The scoring surface is the same for
+// all of them: the gun changes the rhythm, not the target.
+const WEAPONS = [
+    { id: 'plasma', label: 'plasma rifle', build: buildPlasma, scale: 0.38, ...RIFLE_HOLD, showcase: 1.9,
+        cooldown: 120, auto: false, kick: 7.4, punch: 0, spread: null, flash: 1, tracer: 0xffe9bd, tracerWidth: 1 },
+    { id: 'ar', label: 'ar', build: buildRifle, scale: 0.36, ...RIFLE_HOLD, showcase: 2.05,
+        cooldown: 95, auto: true, kick: 3.2, punch: 0.0045, spread: { step: 0.005, max: 0.045 }, flash: 0.9, tracer: 0xffd88a, tracerWidth: 0.45 },
+    { id: 'pistol', label: 'pistol', build: buildPistol, scale: 0.42, ...PISTOL_HOLD, showcase: 0.95,
+        cooldown: 110, auto: false, kick: 4.6, punch: 0.006, spread: { step: 0.006, max: 0.03 }, flash: 0.75, tracer: 0xffd88a, tracerWidth: 0.4 },
+    { id: 'deagle', label: 'deagle', build: buildDeagle, scale: 0.42, ...PISTOL_HOLD, showcase: 1.12,
+        cooldown: 380, auto: false, kick: 11, punch: 0.02, spread: { step: 0.03, max: 0.06 }, flash: 1.5, tracer: 0xffd08a, tracerWidth: 0.6 },
+    { id: 'revolver', label: 'revolver', build: buildRevolver, scale: 0.42, ...PISTOL_HOLD, showcase: 1.25,
+        cooldown: 480, auto: false, kick: 9.5, punch: 0.016, spread: null, flash: 1.3, tracer: 0xffd08a, tracerWidth: 0.55 },
+];
+
+let weapon = WEAPONS[0];
+
+function buildViewmodel() {
+    viewScene = new THREE.Scene();
+    viewCamera = new THREE.PerspectiveCamera(60, 1, 0.01, 40);
+
+    viewAmbient = new THREE.AmbientLight(INK, 1.2);
+    viewScene.add(viewAmbient);
+
+    // The menu preview gets its own light and a soft glow behind it, so a dark
+    // gun still reads against a dark room. Both are off during a round.
+    showcaseLight = new THREE.PointLight(INK, 0, 6);
+    viewScene.add(showcaseLight);
+    showcaseGlow = new THREE.Sprite(new THREE.SpriteMaterial({
         map: GLOW,
         transparent: true,
+        opacity: 0.22,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
     }));
-    puff.scale.setScalar(0.5);
-    flash.add(puff);
-    const spark = new THREE.Mesh(UNIT_BALL, new THREE.MeshBasicMaterial({
-        color: 0xfff3da,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-    }));
-    spark.scale.setScalar(0.07);
-    flash.add(spark);
-    flash.userData.puff = puff;
-    flash.userData.spark = spark;
-    muzzle.add(flash);
+    showcaseGlow.visible = false;
+    viewScene.add(showcaseGlow);
+    const key = new THREE.DirectionalLight(INK, 2.2);
+    key.position.set(-0.6, 1, 0.4);
+    viewScene.add(key);
+    const fill = new THREE.DirectionalLight(0xa67d43, 1.1);
+    fill.position.set(1, -0.4, 0.6);
+    viewScene.add(fill);
 
-    flashLight = new THREE.PointLight(AMBER, 0, 3);
-    flashLight.position.set(0, 0, -0.2);
-    muzzle.add(flashLight);
+    for (const entry of WEAPONS) {
+        const g = entry.build();
+        g.scale.setScalar(entry.scale);
+        g.visible = false;
+        guns[entry.id] = g;
+        viewScene.add(g);
+    }
 
-    g.position.set(HOME.pos[0], HOME.pos[1], HOME.pos[2]);
-    g.rotation.set(HOME.rot[0], HOME.rot[1], HOME.rot[2]);
-    g.scale.setScalar(GUN_SCALE);
-    return g;
+    // The tracer lives in the scene rather than on the gun: once it is away it
+    // flies straight while the gun is still recoiling.
+    boltPivot = new THREE.Group();
+    boltPivot.visible = false;
+    bolt = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.024, 0.012, 0.6, 8),
+        new THREE.MeshBasicMaterial({
+            color: 0xffe9bd,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        })
+    );
+    bolt.rotation.x = Math.PI / 2; // length along the pivot's +Z, which lookAt aims
+    boltPivot.add(bolt);
+    viewScene.add(boltPivot);
+}
+
+function selectWeapon(id) {
+    const shown = !!(gun && gun.visible);
+    const floating = showcase;
+    if (gun) gun.visible = false;
+
+    weapon = WEAPONS.find((w) => w.id === id) || WEAPONS[0];
+    gun = guns[weapon.id];
+    ({ muzzle, flash, flashLight } = gun.userData);
+    bolt.material.color.set(weapon.tracer);
+    bolt.scale.set(weapon.tracerWidth, 1, weapon.tracerWidth);
+
+    // Start from rest, so a swap never inherits the last gun's recoil.
+    showGun(false);
+    gun.position.set(...weapon.home.pos);
+    gun.rotation.set(...weapon.home.rot);
+    gun.visible = shown;
+    showcase = floating;
+    applyShowcaseLights();
+    streak = 0;
+    lastShotAt = -Infinity;
 }
 
 // Recoil, sway, the pulsing core and the inspect animation, all folded into the
@@ -671,16 +1045,36 @@ function updateGun(now, dt) {
     }
 
     const breathe = running ? 1 : 0.4;
-    gun.position.set(
-        lerp(HOME.pos[0], INSPECT.pos[0], pose) - sway.x * 0.8 + Math.sin(now / 1400) * 0.004 * breathe,
-        lerp(HOME.pos[1], INSPECT.pos[1], pose) - sway.y * 0.5 + Math.sin(now / 900) * 0.005 * breathe + kick * 0.022,
-        lerp(HOME.pos[2], INSPECT.pos[2], pose) + kick * 0.1
-    );
-    gun.rotation.set(
-        lerp(HOME.rot[0], INSPECT.rot[0], pose) - kick * 0.26 + sway.y * 0.9,
-        lerp(HOME.rot[1], INSPECT.rot[1], pose) + sway.x * 1.1 + spin,
-        lerp(HOME.rot[2], INSPECT.rot[2], pose) + kick * 0.06 + roll
-    );
+    if (showcase) {
+        // On the menu the picked gun floats in the gap between the panel and
+        // the board: a slow loop round a small circle, turning as it goes so
+        // every side of it gets shown.
+        const t = now / 1000;
+        const d = weapon.showcase;
+        const half = Math.tan((viewCamera.fov * Math.PI) / 360) * d;
+        const cx = showcaseX * half * viewCamera.aspect;
+        gun.position.set(cx + Math.cos(t * 0.9) * d * 0.08, Math.sin(t * 0.9) * d * 0.06, -d);
+        gun.rotation.set(0.14 + Math.sin(t * 0.9) * 0.1, t * 0.7, Math.cos(t * 0.9) * 0.12);
+        showcaseLight.position.set(cx - d * 0.3, d * 0.45, -d * 0.4);
+        showcaseGlow.position.set(cx, 0, -d - 0.4);
+        showcaseGlow.scale.setScalar(d * 1.1);
+    } else {
+        gun.position.set(
+            lerp(weapon.home.pos[0], weapon.inspect.pos[0], pose) - sway.x * 0.8 + Math.sin(now / 1400) * 0.004 * breathe,
+            lerp(weapon.home.pos[1], weapon.inspect.pos[1], pose) - sway.y * 0.5 + Math.sin(now / 900) * 0.005 * breathe + kick * 0.022,
+            lerp(weapon.home.pos[2], weapon.inspect.pos[2], pose) + kick * 0.1
+        );
+        gun.rotation.set(
+            lerp(weapon.home.rot[0], weapon.inspect.rot[0], pose) - kick * 0.26 + sway.y * 0.9,
+            lerp(weapon.home.rot[1], weapon.inspect.rot[1], pose) + sway.x * 1.1 + spin,
+            lerp(weapon.home.rot[2], weapon.inspect.rot[2], pose) + kick * 0.06 + roll
+        );
+    }
+
+    // The revolver's cylinder turns one chamber per shot, quickly but not
+    // instantly, so the turn reads.
+    const drum = gun.userData.drum;
+    if (drum) drum.rotation.z += (gun.userData.drumAngle - drum.rotation.z) * Math.min(1, dt * 18);
 
     // The core breathes when idle and goes bright for the length of a shot.
     const heat = flashStart ? Math.max(0, 1 - (now - flashStart) / 260) : 0;
@@ -698,9 +1092,9 @@ function updateGun(now, dt) {
         } else {
             flash.visible = true;
             const fade = 1 - t;
-            flash.userData.puff.scale.setScalar(0.4 + t * 0.55);
+            flash.userData.puff.scale.setScalar((0.4 + t * 0.55) * weapon.flash);
             flash.userData.puff.material.opacity = fade;
-            flash.userData.spark.scale.setScalar(0.085 * fade);
+            flash.userData.spark.scale.setScalar(0.085 * fade * weapon.flash);
             flash.userData.spark.material.opacity = fade;
             flashLight.intensity = 9 * fade;
         }
@@ -720,15 +1114,16 @@ function updateGun(now, dt) {
     }
 }
 
-// Called on every shot, hit or miss: the rifle does not know whether it landed.
+// Called on every shot, hit or miss: the gun does not know whether it landed.
 function fireGun(ndc) {
     if (!gun.visible) return;
     setAimPoint(ndc);
-    kickVel += 7.4;
+    kickVel += weapon.kick;
     flashStart = performance.now();
     // A sprite is always square to the camera, so a fresh spin on the texture
     // is the only thing keeping two shots from flashing identically.
     flash.userData.puff.material.rotation = Math.random() * Math.PI * 2;
+    if (gun.userData.drum) gun.userData.drumAngle += Math.PI / 3;
 
     gun.updateMatrixWorld();
     muzzle.getWorldPosition(muzzleWorld);
@@ -739,13 +1134,31 @@ function fireGun(ndc) {
     bolt.material.opacity = 1;
     boltStart = flashStart;
 
-    // A shot cuts an inspect short by jumping it to the part where the rifle
+    // A shot cuts an inspect short by jumping it to the part where the gun
     // comes back down, rather than snapping.
     if (inspectStart) inspectStart = Math.min(inspectStart, performance.now() - INSPECT_MS * 0.86);
 }
 
+// The menu preview. Only on a wide screen: when the menu stacks into one
+// column there is no gap to float in, and the gun would sit under the text.
+function setShowcase(on) {
+    showcase = on && window.innerWidth > 900;
+    if (showcase) measureShowcase();
+    if (gun) gun.visible = showcase;
+    applyShowcaseLights();
+}
+
+function applyShowcaseLights() {
+    if (!viewAmbient) return;
+    viewAmbient.intensity = showcase ? 2.4 : 1.2;
+    showcaseLight.intensity = showcase ? 9 : 0;
+    showcaseGlow.visible = showcase;
+}
+
 function showGun(visible) {
     if (!gun) return;
+    showcase = false;
+    applyShowcaseLights();
     gun.visible = visible;
     if (visible) return;
     kick = 0;
@@ -753,6 +1166,7 @@ function showGun(visible) {
     inspectStart = 0;
     flashStart = 0;
     boltStart = 0;
+    triggerHeld = false;
     flash.visible = false;
     flashLight.intensity = 0;
     boltPivot.visible = false;
@@ -778,7 +1192,7 @@ function render() {
     renderer.render(scene, camera);
     if (gun && gun.visible) {
         // Fresh depth for the viewmodel pass, so the rifle is always in front
-        // of the arena no matter how close a beaver has spawned.
+        // of the arena no matter how close a target has spawned.
         renderer.clearDepth();
         renderer.render(viewScene, viewCamera);
     }
@@ -823,10 +1237,24 @@ function tappedGun(ndc) {
 // A shot from the middle of the screen, which is where the crosshair is.
 function fire(ndc) {
     if (!running) return;
-    shots++;
-    fireGun(ndc);
+    const now = performance.now();
+    if (now - lastShotAt < weapon.cooldown) return;
 
-    raycaster.setFromCamera(ndc || CENTRE, camera);
+    // Shots fired close together wander further from where the player aimed,
+    // which is what keeps holding down the AR from being free hits.
+    streak = now - lastShotAt < weapon.cooldown * 2.5 ? streak + 1 : 0;
+    lastShotAt = now;
+    shots++;
+
+    let aim = ndc || CENTRE;
+    if (weapon.spread && streak) {
+        const r = Math.min(weapon.spread.max, streak * weapon.spread.step) * Math.sqrt(Math.random());
+        const a = Math.random() * Math.PI * 2;
+        aim = new THREE.Vector2(aim.x + (Math.cos(a) * r) / camera.aspect, aim.y + Math.sin(a) * r);
+    }
+    fireGun(aim);
+
+    raycaster.setFromCamera(aim, camera);
     const hit = raycaster.intersectObjects(targetGroup.children, true)[0];
 
     if (hit) {
@@ -836,6 +1264,14 @@ function fire(ndc) {
         hitPoint.copy(target.position);
         spawnBurst(hitPoint);
         placeTarget(target);
+    }
+
+    // Recoil climbs the view, so a second shot has to pull back down onto the
+    // target. Only with the pointer locked: on a phone the view does not move.
+    if (weapon.punch && document.pointerLockElement) {
+        pitch = Math.min(PITCH_LIMIT, pitch + weapon.punch);
+        yaw += (Math.random() - 0.5) * weapon.punch * 0.6;
+        applyLook();
     }
 
     updateHud();
@@ -857,6 +1293,8 @@ function startRound() {
     endsAt = performance.now() + ROUND_MS;
     stage.classList.add('is-running');
     panel.hidden = true;
+    hideSave();
+    lastRun = null;
     hud.hidden = false;
     hud.setAttribute('aria-hidden', 'false');
     crosshair.hidden = false;
@@ -885,6 +1323,7 @@ function endRound() {
     crosshair.hidden = true;
     panel.hidden = false;
     showGun(false);
+    setShowcase(true);
     if (document.pointerLockElement) document.exitPointerLock();
 
     const beaten = hits > best;
@@ -903,6 +1342,10 @@ function endRound() {
     elStatNote.textContent = `${accuracy()}% accuracy · ${shots} ${shots === 1 ? 'shot' : 'shots'} · best ${best}`;
     elStart.textContent = 'go again';
     setNote('');
+
+    lastRun = hits > 0 ? { score: hits, shots, gun: weapon.id } : null;
+    lockPicks(false);
+    elSaveOpen.hidden = !lastRun || !boardOnline;
 }
 
 function accuracy() {
@@ -929,6 +1372,8 @@ function loop(now) {
     updateBursts(now);
     updateGun(now, dt);
 
+    if (running && triggerHeld && weapon.auto) fire();
+
     if (running) {
         const left = Math.max(0, endsAt - now);
         elTime.textContent = (left / 1000).toFixed(1);
@@ -950,12 +1395,15 @@ function pause(message) {
     crosshair.hidden = true;
     panel.hidden = false;
     showGun(false);
+    setShowcase(true);
     if (document.pointerLockElement) document.exitPointerLock();
     elTitle.textContent = 'paused';
     elStatLabel.textContent = 'hits so far';
     elStatValue.textContent = String(hits);
     elStatNote.textContent = `${(remainingMs / 1000).toFixed(1)}s left · best ${best}`;
     elStart.textContent = 'resume';
+    hideSave();
+    lockPicks(true);
     setNote(message || '');
 }
 
@@ -983,7 +1431,168 @@ function setNote(text) {
     elNote.hidden = !text;
 }
 
+/* ---------- loadout ---------- */
+
+function remember(key, value) {
+    try {
+        localStorage.setItem(key, value);
+    } catch {
+        // the pick lasts for this visit only
+    }
+}
+
+function recall(key) {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+// One row of radio-style chips. Arrow keys are not wired: there are five
+// options and a tab stop each is fine.
+function buildChips(container, options, selected, onPick) {
+    container.replaceChildren();
+    for (const option of options) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'aim-chip';
+        chip.setAttribute('role', 'radio');
+        chip.setAttribute('aria-checked', String(option.id === selected));
+        chip.textContent = option.label;
+        chip.addEventListener('click', () => {
+            for (const other of container.children) other.setAttribute('aria-checked', String(other === chip));
+            onPick(option.id);
+        });
+        container.append(chip);
+    }
+}
+
+// Mid-round the loadout is locked, so a paused run cannot swap guns halfway.
+function lockPicks(locked) {
+    for (const chip of [...elGuns.children, ...elTargets.children]) chip.disabled = locked;
+}
+
+function updateHint() {
+    if (touchOnly) {
+        elHint.textContent = `tap the ${targetKind.id === 'bullseye' ? 'targets' : `${targetKind.label}s`} · tap the gun to inspect it`;
+    } else {
+        elHint.textContent = `${weapon.auto ? 'hold to spray' : 'click to fire'} · move to aim · f to inspect · esc to pause`;
+    }
+}
+
+/* ---------- leaderboard ---------- */
+
+// The board lives behind the Worker. On a static host there is no /api, so the
+// first failed read marks it offline and the save button never shows.
+let boardOnline = false;
+
+function renderBoard(scores, mine) {
+    elBoard.replaceChildren();
+    scores.forEach((entry, i) => {
+        const row = document.createElement('li');
+        row.className = 'aim-board-row';
+        if (entry.id === mine) row.classList.add('is-mine');
+
+        const place = document.createElement('span');
+        place.className = 'aim-board-place';
+        place.textContent = String(i + 1);
+
+        const name = document.createElement('span');
+        name.className = 'aim-board-name';
+        name.textContent = entry.name;
+        const gunName = WEAPONS.find((w) => w.id === entry.gun);
+        if (gunName) {
+            const tag = document.createElement('small');
+            tag.textContent = ` ${gunName.label}`;
+            name.append(tag);
+        }
+
+        const score = document.createElement('span');
+        score.className = 'aim-board-score';
+        score.textContent = String(entry.score);
+
+        const acc = document.createElement('span');
+        acc.className = 'aim-board-acc';
+        acc.textContent = `${entry.accuracy}%`;
+
+        row.append(place, name, score, acc);
+        elBoard.append(row);
+    });
+    elBoardEmpty.hidden = scores.length > 0;
+    elBoardEmpty.textContent = 'no scores yet. be the first.';
+}
+
+async function loadBoard() {
+    try {
+        const res = await fetch('/api/aim', { cache: 'no-store' });
+        if (!res.ok) throw new Error(String(res.status));
+        const { scores } = await res.json();
+        boardOnline = true;
+        renderBoard(Array.isArray(scores) ? scores : [], null);
+    } catch {
+        boardOnline = false;
+        elBoard.replaceChildren();
+        elBoardEmpty.hidden = false;
+        elBoardEmpty.textContent = 'the leaderboard is offline right now.';
+    }
+}
+
+function hideSave() {
+    elSaveOpen.hidden = true;
+    elSave.hidden = true;
+    elSaveMsg.textContent = '';
+}
+
+function openSave() {
+    if (!lastRun) return;
+    elSaveOpen.hidden = true;
+    elSave.hidden = false;
+    elSaveMsg.textContent = `${lastRun.score} ${lastRun.score === 1 ? 'hit' : 'hits'}, ${Math.round((lastRun.score / lastRun.shots) * 100)}% accuracy`;
+    try {
+        elName.value = localStorage.getItem(NAME_KEY) || '';
+    } catch {
+        // no remembered name
+    }
+    elName.focus();
+}
+
+async function saveScore(event) {
+    event.preventDefault();
+    const name = elName.value.trim();
+    if (!lastRun || !name) return;
+
+    elSaveBtn.disabled = true;
+    elSaveMsg.textContent = 'saving…';
+    try {
+        const res = await fetch('/api/aim', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name, score: lastRun.score, shots: lastRun.shots, gun: lastRun.gun }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'could not save');
+
+        try {
+            localStorage.setItem(NAME_KEY, name);
+        } catch {
+            // the name just will not be prefilled next time
+        }
+        lastRun = null;
+        renderBoard(data.scores || [], data.id);
+        elSave.hidden = true;
+        setNote(data.place ? `saved. you are #${data.place} on the board.` : 'saved, but not quite top 50 yet.');
+    } catch (error) {
+        elSaveMsg.textContent = error.message || 'could not save, try again';
+    } finally {
+        elSaveBtn.disabled = false;
+    }
+}
+
 /* ---------- wiring ---------- */
+
+elSaveOpen.addEventListener('click', openSave);
+elSave.addEventListener('submit', saveScore);
 
 // One button: it starts a fresh round, or picks up a paused one.
 elStart.addEventListener('click', () => {
@@ -1021,7 +1630,12 @@ canvas.addEventListener('pointerdown', (event) => {
         return;
     }
 
+    triggerHeld = true;
     fire();
+});
+
+document.addEventListener('pointerup', () => {
+    triggerHeld = false;
 });
 
 document.addEventListener('mousemove', onMouseMove);
@@ -1041,7 +1655,7 @@ document.addEventListener('pointerlockerror', () => {
     fallbackAim = true;
     stage.classList.remove('is-locked');
     crosshair.hidden = true;
-    setNote('pointer lock was refused, so aim by clicking the beavers directly');
+    setNote('pointer lock was refused, so aim by clicking the targets directly');
 });
 
 document.addEventListener('keydown', (event) => {
@@ -1064,17 +1678,32 @@ document.addEventListener('visibilitychange', () => {
 
 /* ---------- boot ---------- */
 
+selectTarget(recall(TARGET_KEY));
 buildScene();
 buildViewmodel();
+selectWeapon(recall(GUN_KEY));
+setShowcase(true);
+buildChips(elGuns, WEAPONS, weapon.id, (id) => {
+    selectWeapon(id);
+    remember(GUN_KEY, id);
+    updateHint();
+});
+buildChips(elTargets, TARGETS, targetKind.id, (id) => {
+    selectTarget(id);
+    remember(TARGET_KEY, id);
+    updateHint();
+});
 applyLook();
 resize();
-window.addEventListener('resize', resize);
+window.addEventListener('resize', () => {
+    resize();
+    if (!panel.hidden) setShowcase(true);
+});
 requestAnimationFrame(loop);
 
 elStart.disabled = false;
 elStart.textContent = 'start';
 elStatValue.textContent = String(best);
 elStatNote.textContent = best ? `30 seconds · best ${best}` : '30 seconds · no runs yet';
-if (touchOnly) {
-    elHint.textContent = 'tap the beavers · tap the rifle to inspect it';
-}
+loadBoard();
+updateHint();

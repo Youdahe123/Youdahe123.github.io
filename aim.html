@@ -27,24 +27,64 @@
             <span class="aim-hud-cell"><b id="aimAcc">100%</b><i>accuracy</i></span>
         </div>
 
-        <!-- Start, pause and results all share one panel. -->
-        <div class="aim-panel" id="aimPanel">
-            <a class="aim-back" href="index.html">&larr; back</a>
+        <!-- Start, pause and results all share one menu: the game panel on the
+             left, the photo and the leaderboard on the right. -->
+        <div class="aim-menu" id="aimPanel">
+            <div class="aim-panel">
+                <a class="aim-back" href="index.html">&larr; back</a>
 
-            <h1 class="aim-title nostyle">aim trainer</h1>
+                <h1 class="aim-title nostyle">aim trainer</h1>
 
-            <div class="aim-stat">
-                <span class="aim-stat-label" id="aimStatLabel">high score</span>
-                <span class="aim-stat-value" id="aimStatValue">0</span>
-                <span class="aim-stat-note" id="aimStatNote">30 seconds &middot; no runs yet</span>
+                <div class="aim-stat">
+                    <span class="aim-stat-label" id="aimStatLabel">high score</span>
+                    <span class="aim-stat-value" id="aimStatValue">0</span>
+                    <span class="aim-stat-note" id="aimStatNote">30 seconds &middot; no runs yet</span>
+                </div>
+
+                <!-- Loadout. The chips are filled in by aim.js from its lists. -->
+                <div class="aim-picks">
+                    <div class="aim-pick">
+                        <span class="aim-pick-label" id="aimGunLabel">gun</span>
+                        <div class="aim-chips" id="aimGuns" role="radiogroup" aria-labelledby="aimGunLabel"></div>
+                    </div>
+                    <div class="aim-pick">
+                        <span class="aim-pick-label" id="aimTargetLabel">target</span>
+                        <div class="aim-chips" id="aimTargets" role="radiogroup" aria-labelledby="aimTargetLabel"></div>
+                    </div>
+                </div>
+
+                <div class="aim-actions">
+                    <button class="aim-btn aim-btn-go" id="aimStart" type="button" disabled>loading…</button>
+                    <button class="aim-btn" id="aimSaveOpen" type="button" hidden>save score</button>
+                    <button class="aim-btn" id="aimReset" type="button">reset score</button>
+                </div>
+
+                <!-- Shown after a round with at least one hit. -->
+                <form class="aim-save" id="aimSave" hidden>
+                    <label class="aim-save-label" for="aimName">name on the board</label>
+                    <div class="aim-save-row">
+                        <input class="aim-input" id="aimName" name="name" type="text" maxlength="20"
+                               autocomplete="nickname" spellcheck="false" placeholder="your name" required>
+                        <button class="aim-btn aim-btn-go" id="aimSaveBtn" type="submit">save</button>
+                    </div>
+                    <p class="aim-save-msg" id="aimSaveMsg" aria-live="polite"></p>
+                </form>
+
+                <p class="aim-hint" id="aimHint">click to fire &middot; move to aim &middot; f to inspect &middot; esc to pause</p>
             </div>
 
-            <div class="aim-actions">
-                <button class="aim-btn aim-btn-go" id="aimStart" type="button" disabled>loading…</button>
-                <button class="aim-btn" id="aimReset" type="button">reset score</button>
-            </div>
+            <aside class="aim-side">
+                <figure class="aim-inspo">
+                    <img src="images/aim-inspo.jpg" alt="Two brothers as kids in red Lions jerseys, sitting on the floor playing csgo on laptops">
+                    <figcaption>this was inspired by my love for csgo. me and my brother playing it as kids.</figcaption>
+                </figure>
 
-            <p class="aim-hint" id="aimHint">click to fire &middot; move to aim &middot; f to inspect &middot; esc to pause</p>
+                <section class="aim-board" aria-labelledby="aimBoardTitle">
+                    <h2 class="aim-side-title nostyle" id="aimBoardTitle">leaderboard</h2>
+                    <ol class="aim-board-list" id="aimBoard"></ol>
+                    <p class="aim-board-empty" id="aimBoardEmpty">loading…</p>
+                </section>
+            </aside>
         </div>
 
         <p class="aim-note" id="aimNote" hidden></p>
