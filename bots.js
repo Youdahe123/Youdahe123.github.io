@@ -672,13 +672,16 @@ export function createBots(ctx) {
 
     // One bullet (or one pellet) from the player. Walls stop it; the nearest
     // bot it reaches first takes the damage. Returns what it hit.
-    function shoot(ray, weaponId, weaponLabel) {
+    // `opts` is for the knife: a short reach, a flat damage, no bullet holes,
+    // and a stab in the back kills outright, as in csgo.
+    function shoot(ray, weaponId, weaponLabel, opts = {}) {
+        const reach = opts.range ?? 400;
         // Hit-test against where the bots are now, not where the last frame
         // drew them.
         root.updateMatrixWorld(true);
         shotRay.ray.copy(ray);
-        shotRay.far = 400;
-        const wall = rayHitsWorld(ray, 400);
+        shotRay.far = reach;
+        const wall = rayHitsWorld(ray, reach);
         let best = null;
         for (const bot of bots) {
             if (!bot.alive) continue;
@@ -689,7 +692,12 @@ export function createBots(ctx) {
             const { bot, hit } = best;
             const part = hit.object.userData.part;
             const headshot = part === 'head';
-            const dmg = damageFor(weaponId, part, hit.distance);
+            let dmg = damageFor(weaponId, part, hit.distance);
+            if (opts.damage != null) {
+                // From behind: the bot is facing the same way the blade is going.
+                const facing = Math.sin(bot.heading) * ray.direction.x + Math.cos(bot.heading) * ray.direction.z;
+                dmg = facing > 0.5 ? 200 : opts.damage;
+            }
             bot.health -= dmg;
             if (bot.health <= 0) {
                 killBot(bot, hit.point, ray.direction, headshot, weaponLabel);
@@ -705,7 +713,7 @@ export function createBots(ctx) {
             bot.lastSeen = performance.now();
             return { hit: true, kill: false, headshot };
         }
-        if (wall) {
+        if (wall && !opts.melee) {
             const n = wall.normal;
             holeDecal(wall.point, n, rand(0.8, 1.2));
             spray(wall.point, n, 5, 5, dustMat, 1, 0.4);

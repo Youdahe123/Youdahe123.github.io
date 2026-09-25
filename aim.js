@@ -4706,6 +4706,14 @@ const INSPECTS = {
         mag: hump(t, 0.35, 0.55) * 0.22,
         back: hump(t, 0.64, 0.72) * 0.03,
     }),
+    // The karambit: three fast spins round the finger through the ring, then
+    // turned over to show the blade.
+    karambit: (t) => ({
+        pose: raise(t, 0.12),
+        flip: easeInOut((t - 0.12) / 0.45) * TAU * 3,
+        twist: Math.PI * (easeInOut((t - 0.62) / 0.14) - easeInOut((t - 0.8) / 0.14)),
+        yaw: hump(t, 0.6, 0.95) * 0.5,
+    }),
     // The pistol: turned out, flipped over round the barrel to show the other
     // side, and flipped back.
     flipside: (t) => ({
@@ -4811,6 +4819,52 @@ function boltPose(b) {
     return { turn: up * 1.1, pull: pull * 0.14 };
 }
 
+// The karambit: a claw of a blade curving forward off the top of a short
+// grip, with a finger ring at the bottom that it spins round.
+function buildKnife() {
+    const g = new THREE.Group();
+    const blade = metal(0xd2cfc6, 0.2, 0.75);
+    const edge = metal(0xf2efe6, 0.1, 0.9);
+    const grip = metal(0x1f2124, 0.7, 0.2);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.26, 0.09), grip);
+    handle.position.set(0, -0.08, 0);
+    handle.rotation.x = -0.25;
+    g.add(handle);
+    for (let i = 0; i < 4; i++) box(g, metal(0x34373a, 0.6, 0.3), [0.074, 0.012, 0.094], [0, -0.16 + i * 0.05, 0.01 - i * 0.012], [-0.25, 0, 0]);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.018, 8, 20), STEEL);
+    ring.rotation.y = Math.PI / 2;
+    ring.position.set(0, -0.28, 0.04);
+    g.add(ring);
+    // The blade: a claw swept forward from the top of the grip and down to a
+    // point, laid out as short segments along a curve so it is one piece,
+    // widest at the grip and tapering to the tip, with a bright edge inside.
+    const S = new THREE.Vector3(0, 0.05, -0.02);
+    const C = new THREE.Vector3(0, 0.24, -0.2);
+    const E = new THREE.Vector3(0, 0.03, -0.34);
+    const at = (t) => new THREE.Vector3()
+        .addScaledVector(S, (1 - t) * (1 - t))
+        .addScaledVector(C, 2 * (1 - t) * t)
+        .addScaledVector(E, t * t);
+    const SEGS = 12;
+    for (let i = 0; i < SEGS; i++) {
+        const p0 = at(i / SEGS);
+        const p1 = at((i + 1) / SEGS);
+        const dir = p1.clone().sub(p0);
+        const len = dir.length();
+        const width = 0.065 * (1 - i / SEGS) + 0.012;
+        for (const [mat, w, thick, drop] of [[blade, width, 0.018, 0], [edge, 0.012, 0.02, width / 2 - 0.004]]) {
+            const seg = new THREE.Mesh(new THREE.BoxGeometry(thick, w, len + 0.004), mat);
+            seg.position.copy(p0.clone().add(p1).multiplyScalar(0.5));
+            seg.rotation.x = Math.atan2(dir.y, -dir.z);
+            // The edge runs along the inside (lower side) of the curve.
+            seg.translateY(-drop);
+            g.add(seg);
+        }
+    }
+    attachMuzzle(g, [0, 0.05, -0.34], 0xffffff);
+    return g;
+}
+
 // How each gun handles. Cooldown is the fastest it will fire again, spread is
 // how far consecutive shots wander from the crosshair (in screen units), punch
 // is how far each shot kicks the view up. The scoring surface is the same for
@@ -4851,6 +4905,19 @@ const WEAPONS = [
         flash: 0.45, tracer: 0xffd88a, tracerWidth: 0.4 },
 ];
 
+// The knife sits in slot 2: never in the gun picker, always a key away.
+const KNIFE = {
+    id: 'knife', label: 'karambit', build: buildKnife, scale: 0.75,
+    home: { pos: [0.27, -0.24, -0.62], rot: [0.15, 0.35, 0.1] },
+    inspect: { pos: [0.06, -0.14, -0.48], rot: [0.25, -0.9, -0.3] },
+    showcase: 0.9, inspectStyle: 'karambit', inspectMs: 3000,
+    pivot: new THREE.Vector3(0, -0.28, 0.04),
+    melee: true, cooldown: 420, heavyCooldown: 950, range: 7,
+    auto: false, kick: 0, punch: 0, spread: null, flash: 0, tracer: 0xffffff, tracerWidth: 0,
+};
+const ALL_WEAPONS = [...WEAPONS, KNIFE];
+let primaryId = WEAPONS[0].id;
+
 let weapon = WEAPONS[0];
 
 function buildViewmodel() {
@@ -4880,7 +4947,7 @@ function buildViewmodel() {
     fill.position.set(1, -0.4, 0.6);
     viewScene.add(fill);
 
-    for (const entry of WEAPONS) {
+    for (const entry of ALL_WEAPONS) {
         const g = entry.build();
         g.scale.setScalar(entry.scale);
         g.visible = false;
@@ -4913,7 +4980,8 @@ function selectWeapon(id) {
     const floating = showcase;
     if (gun) gun.visible = false;
 
-    weapon = WEAPONS.find((w) => w.id === id) || WEAPONS[0];
+    weapon = ALL_WEAPONS.find((w) => w.id === id) || WEAPONS[0];
+    if (!weapon.melee) primaryId = weapon.id;
     gun = guns[weapon.id];
     ({ muzzle, flash, flashLight } = gun.userData);
     bolt.material.color.set(weapon.tracer);
@@ -4929,6 +4997,22 @@ function selectWeapon(id) {
     streak = 0;
     lastShotAt = -Infinity;
     if (scoped) setScope(false);
+    // Pulled out from below on a swap mid-round.
+    equipStart = running ? performance.now() : 0;
+    slashStart = 0;
+}
+
+// Slot keys: 1 for the gun, 2 for the knife. A reload in progress is dropped.
+let equipStart = 0;
+function equip(id) {
+    if (!running || weapon.id === id) return;
+    cancelReload();
+    inspectStart = 0;
+    selectWeapon(id);
+    showGun(true);
+    burst({ cutoff: 2400, type: 'bandpass', q: 4, decay: 0.08, volume: 0.25 });
+    updateAmmo();
+    updateHint();
 }
 
 // Recoil, sway, the pulsing core and the inspect animation, all folded into the
@@ -5041,7 +5125,7 @@ function fillAmmo() {
 }
 
 function startReload() {
-    if (!reloadsOn || !running || reloadStart || ammo[weapon.id] >= weapon.mag) return;
+    if (weapon.melee || !reloadsOn || !running || reloadStart || ammo[weapon.id] >= weapon.mag) return;
     if (scoped) setScope(false);
     rezoom = false;
     chamberStart = 0;
@@ -5085,6 +5169,14 @@ function tickAmmo(now) {
 }
 
 function updateAmmo() {
+    if (weapon.melee) {
+        elAmmoGun.textContent = weapon.label;
+        elAmmoMag.textContent = '—';
+        elAmmoReserve.hidden = true;
+        elAmmo.classList.remove('is-low', 'is-reloading');
+        elAmmoFill.style.width = '0%';
+        return;
+    }
     const left = ammo[weapon.id] ?? weapon.mag;
     elAmmoGun.textContent = weapon.selectFire ? `${weapon.label} · ${akAuto ? 'auto' : 'semi'}` : weapon.label;
     elAmmoMag.textContent = reloadsOn ? String(left) : '∞';
@@ -5314,6 +5406,18 @@ function updateGun(now, dt) {
         const phase = weapon.shellMs ? (elapsed % weapon.shellMs) / weapon.shellMs : 0;
         ins = { ...REST, ...RELOADS[weapon.reloadStyle](t, phase) };
     }
+    // The knife's swing: a slash sweeps across, a stab drives forward.
+    if (slashStart) {
+        const t = (now - slashStart) / (slashHeavy ? 520 : 300);
+        if (t >= 1) {
+            slashStart = 0;
+        } else {
+            const sweep = hump(t, 0, 1);
+            ins = slashHeavy
+                ? { ...ins, back: -hump(t, 0.1, 0.8) * 0.22, pitch: ins.pitch - sweep * 0.4 }
+                : { ...ins, yaw: ins.yaw + (0.9 - 1.8 * easeInOut(t)) * sweep, roll: ins.roll + sweep * 0.8, pitch: ins.pitch - sweep * 0.2 };
+        }
+    }
     const { pose } = ins;
 
     const breathe = running ? 1 : 0.4;
@@ -5336,6 +5440,12 @@ function updateGun(now, dt) {
             lerp(weapon.home.pos[1], weapon.inspect.pos[1], pose) - sway.y * 0.5 + Math.sin(now / 900) * 0.005 * breathe + kick * 0.022 + ins.lift,
             lerp(weapon.home.pos[2], weapon.inspect.pos[2], pose) + kick * 0.1 + ins.back
         );
+        // Drawn up from below after a swap.
+        if (equipStart) {
+            const e = clamp((now - equipStart) / 320, 0, 1);
+            gun.position.y -= (1 - easeOut(e)) * 0.35;
+            if (e >= 1) equipStart = 0;
+        }
         // Walking in bots mode bobs the gun with each stride.
         if (botsMode() && running) {
             const stride = Math.min(1, bots.speed / 21);
@@ -5625,9 +5735,54 @@ function toggleFireMode() {
 const BUFFER_MS = 220;
 let bufferedShot = 0;
 
+let slashStart = 0;
+let slashHeavy = false;
+const meleeRay = new THREE.Raycaster();
+
+// A knife attack: a quick slash, or a slower heavy stab. Short range, no
+// ammo, and in bots mode a stab from behind kills outright.
+function melee(heavy) {
+    if (!running || (botsMode() && !bots.alive)) return;
+    const now = performance.now();
+    if (now - lastShotAt < (heavy ? weapon.heavyCooldown : weapon.cooldown)) return;
+    lastShotAt = now;
+    slashStart = now;
+    slashHeavy = heavy;
+    inspectStart = 0;
+    shots++;
+    burst({ cutoff: heavy ? 1400 : 2600, type: 'bandpass', q: 1.2, decay: heavy ? 0.22 : 0.14, volume: 0.35 });
+
+    camera.updateMatrixWorld();
+    meleeRay.setFromCamera(CENTRE, camera);
+    let landed = false;
+    if (botsMode()) {
+        const result = bots.shoot(meleeRay.ray, 'knife', weapon.label, { range: weapon.range, damage: heavy ? 65 : 40, melee: true });
+        landed = result.hit;
+    } else {
+        meleeRay.far = weapon.range;
+        const hit = meleeRay.intersectObjects(targetGroup.children, true)[0];
+        if (hit) {
+            let target = hit.object;
+            while (target.parent && target.parent !== targetGroup) target = target.parent;
+            spawnBurst(hitPoint.copy(target.position));
+            placeTarget(target);
+            landed = true;
+        }
+    }
+    if (landed) {
+        hits++;
+        tone({ at: 0.05, from: 180, to: 90, decay: 0.12, volume: 0.35 });
+    }
+    updateHud();
+}
+
 function fire(ndc) {
     if (!running) return;
     if (botsMode() && !bots.alive) return;
+    if (weapon.melee) {
+        melee(false);
+        return;
+    }
     const now = performance.now();
     const ready = Math.max(lastShotAt + weapon.cooldown, chamberStart ? chamberStart + BOLT_MS : 0);
     if (now < ready) {
@@ -5770,6 +5925,7 @@ function afterShot(now) {
 /* ---------- round ---------- */
 
 function startRound() {
+    if (weapon.melee) selectWeapon(primaryId);
     hits = 0;
     shots = 0;
     kills = 0;
@@ -6162,14 +6318,18 @@ function updateHint() {
     if (touchOnly) {
         elHint.textContent = `tap the ${targetKind.id === 'bullseye' ? 'targets' : `${targetKind.label}s`} · tap the gun to inspect it`;
     } else {
+        if (weapon.melee) {
+            elHint.textContent = `click to slash · right click to stab · f to inspect · 1 for your gun${botsMode() ? ' · wasd to move' : ''} · esc to pause`;
+            return;
+        }
         const fire = weapon.selectFire
             ? (akAuto ? 'hold to spray · g for single shot' : 'click to fire · g for full auto')
             : isAuto() ? 'hold to spray' : weapon.scope ? 'click to fire · right click to scope' : 'click to fire';
         if (botsMode()) {
-            elHint.textContent = `wasd to move · space to jump · shift to walk · ctrl or c to crouch · ${fire}${reloadsOn ? ' · r to reload' : ''} · esc to pause`;
+            elHint.textContent = `wasd to move · space to jump · shift to walk · ctrl or c to crouch · ${fire}${reloadsOn ? ' · r to reload' : ''} · 2 for the knife · esc to pause`;
             return;
         }
-        elHint.textContent = `${fire} · ${reloadsOn ? 'r to reload · ' : ''}f to inspect · esc to pause`;
+        elHint.textContent = `${fire} · ${reloadsOn ? 'r to reload · ' : ''}f to inspect · 2 for the knife · esc to pause`;
     }
 }
 
@@ -6325,6 +6485,10 @@ function onPress(event) {
     if (!running) return;
 
     if (event.button === 2) {
+        if (weapon.melee) {
+            melee(true);
+            return;
+        }
         if (weapon.scope && !reloadStart) {
             rezoom = false;
             setScope(!scoped);
@@ -6483,6 +6647,8 @@ document.addEventListener('keydown', (event) => {
         inspectStart = performance.now();
     }
     if ((event.key === 'r' || event.key === 'R') && running && !event.repeat) startReload();
+    if (event.code === 'Digit1' && !event.repeat) equip(primaryId);
+    if (event.code === 'Digit2' && !event.repeat) equip('knife');
     if (event.code === 'KeyG' && !event.repeat && !(event.target instanceof HTMLInputElement)) toggleFireMode();
 });
 
