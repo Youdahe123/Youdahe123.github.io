@@ -913,6 +913,7 @@ const WEAPONS = [
     { id: 'pistol', label: 'pistol', build: buildPistol, scale: 0.42, ...PISTOL_HOLD, showcase: 0.95,
         cooldown: 110, auto: false, kick: 4.6, punch: 0.006, spread: { step: 0.006, max: 0.03 }, flash: 0.75, tracer: 0xffd88a, tracerWidth: 0.4 },
     { id: 'deagle', label: 'deagle', build: buildDeagle, scale: 0.42, ...PISTOL_HOLD, showcase: 1.12,
+        inspectStyle: 'twirl', inspectMs: 2600, pivot: new THREE.Vector3(0, -0.08, -0.12),
         cooldown: 380, auto: false, kick: 11, punch: 0.02, spread: { step: 0.03, max: 0.06 }, flash: 1.5, tracer: 0xffd08a, tracerWidth: 0.6 },
     { id: 'revolver', label: 'revolver', build: buildRevolver, scale: 0.42, ...PISTOL_HOLD, showcase: 1.25,
         cooldown: 480, auto: false, kick: 9.5, punch: 0.016, spread: null, flash: 1.3, tracer: 0xffd08a, tracerWidth: 0.55 },
@@ -998,6 +999,15 @@ function selectWeapon(id) {
 // Recoil, sway, the pulsing core and the inspect animation, all folded into the
 // rifle's transform once per frame.
 const AIM_POINT = new THREE.Vector3(0, 0, -14);
+const TWIRL_PIVOT = new THREE.Vector3();
+const twirlStill = new THREE.Vector3();
+const twirlTurned = new THREE.Vector3();
+const twirlTurn = new THREE.Quaternion();
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+
+function inspectLength() {
+    return weapon.inspectMs || INSPECT_MS;
+}
 const muzzleWorld = new THREE.Vector3();
 
 // Where on the screen the shot went, in the viewmodel camera's own space, so
@@ -1033,10 +1043,20 @@ function updateGun(now, dt) {
     let pose = 0;
     let spin = 0;
     let roll = 0;
+    let flip = 0;
     if (inspectStart) {
-        const t = (now - inspectStart) / INSPECT_MS;
+        const t = (now - inspectStart) / inspectLength();
         if (t >= 1) {
             inspectStart = 0;
+        } else if (weapon.inspectStyle === 'twirl') {
+            // The csgo deagle inspect: up, two quick turns round the trigger
+            // finger, then rolled onto its side to show the slide off before
+            // it drops back. Whole turns, so it lands exactly where it began.
+            pose = easeInOut(t / 0.15) * easeInOut((1 - t) / 0.15);
+            flip = easeInOut((t - 0.18) / 0.4) * Math.PI * 4;
+            const show = Math.sin(Math.PI * clamp((t - 0.6) / 0.32, 0, 1));
+            roll = show * 0.95;
+            spin = show * 0.45;
         } else {
             pose = easeInOut(t / 0.18) * easeInOut((1 - t) / 0.18);
             spin = easeInOut((t - 0.12) / 0.7) * Math.PI * 2;
@@ -1069,6 +1089,20 @@ function updateGun(now, dt) {
             lerp(weapon.home.rot[1], weapon.inspect.rot[1], pose) + sway.x * 1.1 + spin,
             lerp(weapon.home.rot[2], weapon.inspect.rot[2], pose) + kick * 0.06 + roll
         );
+
+        // A twirl turns round the trigger guard, not the middle of the gun.
+        // Rotating about the origin and then moving the gun by the difference
+        // between where the guard would sit with and without the flip keeps
+        // that point still while everything else swings round it.
+        // The turn is about the gun's own sideways axis, so the barrel sweeps
+        // up and over the hand whichever way the gun is angled at the time.
+        if (flip) {
+            TWIRL_PIVOT.copy(weapon.pivot).multiplyScalar(weapon.scale);
+            twirlStill.copy(TWIRL_PIVOT).applyQuaternion(gun.quaternion);
+            gun.quaternion.multiply(twirlTurn.setFromAxisAngle(X_AXIS, flip));
+            twirlTurned.copy(TWIRL_PIVOT).applyQuaternion(gun.quaternion);
+            gun.position.add(twirlStill.sub(twirlTurned));
+        }
     }
 
     // The revolver's cylinder turns one chamber per shot, quickly but not
@@ -1136,7 +1170,7 @@ function fireGun(ndc) {
 
     // A shot cuts an inspect short by jumping it to the part where the gun
     // comes back down, rather than snapping.
-    if (inspectStart) inspectStart = Math.min(inspectStart, performance.now() - INSPECT_MS * 0.86);
+    if (inspectStart) inspectStart = Math.min(inspectStart, performance.now() - inspectLength() * 0.86);
 }
 
 // The menu preview. Only on a wide screen: when the menu stacks into one
