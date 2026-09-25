@@ -5125,6 +5125,7 @@ h1.post-full-title::before {
 }
 
 .aim-crosshair {
+    --xh: var(--ink-fg);
     position: absolute;
     top: 50%;
     left: 50%;
@@ -5136,10 +5137,99 @@ h1.post-full-title::before {
 
 .aim-crosshair span {
     position: absolute;
-    background: var(--ink-fg);
-    opacity: 0.85;
+    background: var(--xh);
+    opacity: 0.9;
     /* A dark edge, so the ticks hold up against the bright maps. */
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+/* The centre dot and the ring, off unless a style asks for them. */
+.aim-crosshair::before,
+.aim-crosshair::after {
+    content: '';
+    position: absolute;
+    display: none;
+}
+
+.aim-crosshair::before {
+    left: 50%;
+    top: 50%;
+    width: 4px;
+    height: 4px;
+    margin: -2px 0 0 -2px;
+    border-radius: 50%;
+    background: var(--xh);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.aim-crosshair::after {
+    inset: 1px;
+    border: 2px solid var(--xh);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+/* Styles. classic is the default: four ticks round a gap. */
+.aim-crosshair[data-style="plus"] span:nth-child(1),
+.aim-crosshair[data-style="plus"] span:nth-child(2) {
+    height: 11px;
+}
+
+.aim-crosshair[data-style="plus"] span:nth-child(3),
+.aim-crosshair[data-style="plus"] span:nth-child(4) {
+    width: 11px;
+}
+
+.aim-crosshair[data-style="t"] span:nth-child(1) {
+    display: none;
+}
+
+.aim-crosshair[data-style="dot"] span,
+.aim-crosshair[data-style="circle"] span {
+    display: none;
+}
+
+.aim-crosshair[data-style="dot"]::before,
+.aim-crosshair[data-style="circle"]::before,
+.aim-crosshair[data-style="circle"]::after,
+.aim-crosshair[data-style="t"]::before {
+    display: block;
+}
+
+/* The copy in the menu sits inline next to the colour swatches. */
+.aim-crosshair.aim-crosshair-preview {
+    position: relative;
+    top: auto;
+    left: auto;
+    flex: none;
+    transform: none;
+}
+
+.aim-swatches {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    margin-top: 0.55rem;
+}
+
+.aim-swatch-row {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.aim-swatch {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--ink-rule);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: inset 0 0 0 2px var(--ink-bg);
+}
+
+.aim-swatch[aria-checked="true"] {
+    border-color: var(--ink-fg);
+    box-shadow: inset 0 0 0 2px var(--ink-bg), 0 0 0 1px var(--ink-fg);
 }
 
 .aim-scope {

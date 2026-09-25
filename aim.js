@@ -12,6 +12,8 @@ const NAME_KEY = 'aim.name';
 const GUN_KEY = 'aim.gun';
 const TARGET_KEY = 'aim.target';
 const MAP_KEY = 'aim.map';
+const XH_KEY = 'aim.crosshair';
+const XH_COLOR_KEY = 'aim.crosshairColor';
 
 // The arena is a box the player stands in the middle of. Targets spawn on a
 // shell in front of them, never behind, so a round is never spent spinning.
@@ -61,6 +63,9 @@ const elGuns = document.getElementById('aimGuns');
 const elTargets = document.getElementById('aimTargets');
 const elMaps = document.getElementById('aimMaps');
 const elScope = document.getElementById('aimScope');
+const elCrosshairs = document.getElementById('aimCrosshairs');
+const elXhColors = document.getElementById('aimXhColors');
+const elXhPreview = document.getElementById('aimXhPreview');
 
 // Touch devices have no pointer to lock, so they aim by tapping the target
 // directly and the copy changes to match.
@@ -295,338 +300,791 @@ function crateTexture(ctx, size) {
     ctx.stroke();
 }
 
-// A sunny desert courtyard in the spirit of dust2: sandstone walls, an arch
-// through to the sky, crates stacked in the corners.
-function buildDust(root) {
-    skyDome(root, 0x4f8cc9, 0xf1d9a6, 0xd9b77e, 0.55);
-    root.add(new THREE.HemisphereLight(0xcfe3f5, 0xb48a52, 1.5));
-    light(root, 'dir', 0xfff0d6, 2.6, [-20, 30, 10]);
+/* ---------- csgo-inspired maps ----------
+
+   Each one is a loose, primitive-built nod to a real map: the landmarks and
+   the palette that make it recognisable, kept out of the patch of sky the
+   targets spawn in. Everything close to the player stays below the lowest a
+   target can float, so nothing ever hides one. */
+
+// A box standing on the floor: size is [width, height, depth], position is
+// [x, height off the floor, z].
+function block(root, material, size, position, turn = 0) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
+    mesh.position.set(position[0], FLOOR_Y + position[1] + size[1] / 2, position[2]);
+    mesh.rotation.y = turn;
+    root.add(mesh);
+    return mesh;
+}
+
+// A surface material with its texture tiled rx by ry times, so walls of
+// different sizes keep the same brick or tile scale.
+function surface(texture, rx = 1, ry = 1, options = {}) {
+    const map = texture.clone();
+    map.repeat.set(rx, ry);
+    map.needsUpdate = true;
+    return new THREE.MeshStandardMaterial({ map, roughness: 0.9, ...options });
+}
+
+const plain = (color, options = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.9, ...options });
+
+// A dark arched opening laid flat against a wall that faces +Z: a doorway
+// or a window, with a round top.
+function archway(root, material, width, height, x, base, z, turn = 0) {
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.PlaneGeometry(width, height - width / 2), material);
+    body.position.y = (height - width / 2) / 2;
+    group.add(body);
+    const top = new THREE.Mesh(new THREE.CircleGeometry(width / 2, 24, 0, Math.PI), material);
+    top.position.y = height - width / 2;
+    group.add(top);
+    group.position.set(x, FLOOR_Y + base, z);
+    group.rotation.y = turn;
+    root.add(group);
+    return group;
+}
+
+// A pitched roof over a w by d footprint, ridge along x, sitting at height h.
+function gableRoof(root, material, w, d, h, x, z, pitch = 0.5, turn = 0) {
+    const group = new THREE.Group();
+    const slope = d / 2 / Math.cos(pitch);
+    for (const side of [-1, 1]) {
+        const plane = new THREE.Mesh(new THREE.BoxGeometry(w + 0.8, 0.3, slope + 0.4), material);
+        plane.position.set(0, Math.sin(pitch) * slope / 2, side * d / 4);
+        plane.rotation.x = side * pitch;
+        group.add(plane);
+    }
+    group.position.set(x, FLOOR_Y + h, z);
+    group.rotation.y = turn;
+    root.add(group);
+}
+
+/* ----- textures ----- */
+
+function pavers(base, line, cells) {
+    return (ctx, size) => {
+        ctx.fillStyle = base;
+        ctx.fillRect(0, 0, size, size);
+        const step = size / cells;
+        for (let y = 0; y < cells; y++) {
+            for (let x = 0; x < cells; x++) {
+                ctx.globalAlpha = 0.06 + Math.random() * 0.12;
+                ctx.fillStyle = Math.random() > 0.5 ? '#000' : '#fff';
+                ctx.fillRect(x * step, y * step, step, step);
+            }
+        }
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = line;
+        ctx.lineWidth = 2;
+        for (let i = 0; i <= cells; i++) {
+            ctx.beginPath(); ctx.moveTo(i * step, 0); ctx.lineTo(i * step, size); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, i * step); ctx.lineTo(size, i * step); ctx.stroke();
+        }
+    };
+}
+
+function cobbles(ctx, size) {
+    ctx.fillStyle = '#6d6154';
+    ctx.fillRect(0, 0, size, size);
+    const n = 10;
+    const step = size / n;
+    for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+            const shade = 150 + Math.floor(Math.random() * 45);
+            ctx.fillStyle = `rgb(${shade}, ${shade - 12}, ${shade - 30})`;
+            ctx.beginPath();
+            ctx.ellipse(x * step + step / 2 + (y % 2) * step / 3, y * step + step / 2, step * 0.44, step * 0.4, Math.random(), 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+}
+
+function terracotta(ctx, size) {
+    ctx.fillStyle = '#9c4527';
+    ctx.fillRect(0, 0, size, size);
+    const rows = 8;
+    const cols = 8;
+    const h = size / rows;
+    const w = size / cols;
+    for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+            const shade = Math.floor(Math.random() * 25);
+            ctx.fillStyle = `rgb(${185 + shade}, ${88 + shade}, ${52 + shade / 2})`;
+            ctx.beginPath();
+            ctx.ellipse(c * w + w / 2 + (r % 2) * w / 2, r * h + h * 0.55, w * 0.46, h * 0.5, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+}
+
+function corrugated(light, dark) {
+    return (ctx, size) => {
+        const n = 16;
+        for (let i = 0; i < n; i++) {
+            const g = ctx.createLinearGradient(i * size / n, 0, (i + 1) * size / n, 0);
+            g.addColorStop(0, dark);
+            g.addColorStop(0.5, light);
+            g.addColorStop(1, dark);
+            ctx.fillStyle = g;
+            ctx.fillRect(i * size / n, 0, size / n, size);
+        }
+        speckle('rgba(0,0,0,0)', ['rgba(0,0,0,0.5)', 'rgba(255,255,255,0.4)'], 500, size)(ctx);
+    };
+}
+
+function hazard(ctx, size) {
+    ctx.fillStyle = '#e8b923';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#1c1c1c';
+    for (let i = -size; i < size * 2; i += size / 4) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i + size / 8, 0);
+        ctx.lineTo(i + size / 8 - size, size);
+        ctx.lineTo(i - size, size);
+        ctx.fill();
+    }
+}
+
+function planks(base, seam) {
+    return (ctx, size) => {
+        ctx.fillStyle = base;
+        ctx.fillRect(0, 0, size, size);
+        const n = 6;
+        for (let i = 0; i < n; i++) {
+            ctx.globalAlpha = 0.1 + Math.random() * 0.15;
+            ctx.fillStyle = Math.random() > 0.5 ? '#000' : '#fff';
+            ctx.fillRect(i * size / n, 0, size / n, size);
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = seam;
+            ctx.fillRect(i * size / n, 0, 3, size);
+        }
+    };
+}
+
+function zellige(ctx, size) {
+    const colors = ['#1f7a7a', '#e9e2d0', '#2d5f8f', '#1a5c5c', '#c9a452'];
+    const n = 16;
+    const s = size / n;
+    for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+            ctx.fillStyle = colors[(x * 3 + y * 5 + ((x ^ y) & 3)) % colors.length];
+            ctx.fillRect(x * s, y * s, s - 1, s - 1);
+        }
+    }
+}
+
+function carpet(ctx, size) {
+    ctx.fillStyle = '#8e1f1f';
+    ctx.fillRect(0, 0, size, size);
+    ctx.strokeStyle = '#d9a441';
+    ctx.lineWidth = size / 24;
+    ctx.strokeRect(size / 16, size / 16, size - size / 8, size - size / 8);
+    ctx.fillStyle = '#1f3f6e';
+    for (const [x, y] of [[0.5, 0.3], [0.5, 0.7], [0.3, 0.5], [0.7, 0.5]]) {
+        ctx.beginPath();
+        ctx.moveTo(x * size, y * size - size / 10);
+        ctx.lineTo(x * size + size / 12, y * size);
+        ctx.lineTo(x * size, y * size + size / 10);
+        ctx.lineTo(x * size - size / 12, y * size);
+        ctx.fill();
+    }
+    ctx.fillStyle = '#d9a441';
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 12, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// Building fronts: a grid of windows, some lit, on a concrete or glass skin.
+function facade(skin, glass, lit) {
+    return (ctx, size) => {
+        ctx.fillStyle = skin;
+        ctx.fillRect(0, 0, size, size);
+        const cols = 8;
+        const rows = 12;
+        const w = size / cols;
+        const h = size / rows;
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                ctx.fillStyle = Math.random() < lit ? '#f4d99a' : glass;
+                ctx.fillRect(c * w + w * 0.18, r * h + h * 0.2, w * 0.64, h * 0.6);
+            }
+        }
+    };
+}
+
+function glyphs(ctx, size) {
+    ctx.fillStyle = '#8d8f7c';
+    ctx.fillRect(0, 0, size, size);
+    const n = 4;
+    const s = size / n;
+    ctx.lineWidth = 3;
+    for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+            const shade = 115 + Math.floor(Math.random() * 30);
+            ctx.fillStyle = `rgb(${shade}, ${shade + 4}, ${shade - 12})`;
+            ctx.fillRect(x * s + 2, y * s + 2, s - 4, s - 4);
+            ctx.strokeStyle = 'rgba(40, 42, 32, 0.6)';
+            ctx.strokeRect(x * s + s * 0.2, y * s + s * 0.2, s * 0.6, s * 0.6);
+            ctx.beginPath();
+            ctx.arc(x * s + s / 2, y * s + s / 2, s * 0.14, 0, Math.PI * 1.5);
+            ctx.stroke();
+        }
+    }
+    speckle('rgba(0,0,0,0)', ['#4f6b35', '#3e5a2a', '#6f8a4a'], 700, size)(ctx);
+}
+
+function radiation(ctx, size) {
+    ctx.fillStyle = '#e8b923';
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#161616';
+    for (let i = 0; i < 3; i++) {
+        const a = -Math.PI / 2 + (i * Math.PI * 2) / 3;
+        ctx.beginPath();
+        ctx.moveTo(size / 2, size / 2);
+        ctx.arc(size / 2, size / 2, size * 0.42, a - 0.52, a + 0.52);
+        ctx.fill();
+    }
+    ctx.fillStyle = '#e8b923';
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size * 0.1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#161616';
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size * 0.07, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// A spray-painted letter, for the site markers.
+function sprayed(letter, color) {
+    return (ctx, size) => {
+        ctx.clearRect(0, 0, size, size);
+        ctx.fillStyle = color;
+        ctx.font = `900 ${size * 0.8}px Impact, Arial Black, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = color;
+        ctx.shadowBlur = size / 30;
+        ctx.fillText(letter, size / 2, size / 2 + size * 0.04);
+    };
+}
+
+function decal(root, draw, size, x, y, z, turn = 0) {
+    const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(size, size),
+        new THREE.MeshStandardMaterial({ map: paint(256, draw), transparent: true, roughness: 1, depthWrite: false })
+    );
+    mesh.position.set(x, FLOOR_Y + y, z);
+    mesh.rotation.y = turn;
+    root.add(mesh);
+}
+
+function palm(root, x, z, height = 11) {
+    const trunk = plain(0x8a6a44);
+    for (let i = 0; i < 6; i++) {
+        const seg = new THREE.Mesh(new THREE.CylinderGeometry(0.34 - i * 0.03, 0.4 - i * 0.03, height / 6, 8), trunk);
+        seg.position.set(x + Math.sin(i * 0.4) * 0.3 * i * 0.3, FLOOR_Y + (i + 0.5) * height / 6, z);
+        root.add(seg);
+    }
+    const frond = plain(0x3f7a2e, { side: THREE.DoubleSide });
+    for (let i = 0; i < 8; i++) {
+        const leaf = new THREE.Mesh(UNIT_BALL, frond);
+        const a = (i / 8) * Math.PI * 2;
+        leaf.scale.set(0.5, 0.12, 3);
+        leaf.position.set(x + Math.cos(a) * 2.2, FLOOR_Y + height - 0.3, z + Math.sin(a) * 2.2);
+        leaf.rotation.set(0, -a + Math.PI / 2, 0);
+        leaf.rotateX(0.35);
+        root.add(leaf);
+    }
+}
+
+function tree(root, x, z, height, leaves) {
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.8, height, 8), plain(0x5a4330));
+    trunk.position.set(x, FLOOR_Y + height / 2, z);
+    root.add(trunk);
+    for (let i = 0; i < 4; i++) {
+        const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(3 + (i % 2) * 1.2, 0), leaves[i % leaves.length]);
+        crown.position.set(x + Math.sin(i * 2.1) * 2.2, FLOOR_Y + height + Math.cos(i * 1.7) * 1.2, z + Math.cos(i * 2.1) * 2.2);
+        crown.rotation.set(i, i * 2, 0);
+        root.add(crown);
+    }
+}
+
+function sunAndSky(root, top, horizon, bottom, sunColor, sunPos, sky = 0xcfe3f5, groundTint = 0xb48a52) {
+    skyDome(root, top, horizon, bottom, 0.55);
+    root.add(new THREE.HemisphereLight(sky, groundTint, 1.4));
+    light(root, 'dir', sunColor, 2.4, sunPos);
     light(root, 'ambient', 0xffffff, 0.25);
+}
+
+/* ----- dust ii ----- */
+
+// The courtyard at the end of Long A: sandstone walls, the double doors hung
+// open in the arch, the blue container, crates, and the spray-painted A.
+function buildDust2(root) {
+    sunAndSky(root, 0x4f8cc9, 0xf1d9a6, 0xd9b77e, 0xfff0d6, [-20, 30, 10]);
 
     ground(root, new THREE.MeshStandardMaterial({
         map: paint(256, speckle('#e0bf85', ['#b8945c', '#f5dfb5', '#a8834d'], 2600), 40),
         roughness: 1,
     }));
 
-    const wall = new THREE.MeshStandardMaterial({ map: paint(256, sandstone, 1), roughness: 0.95 });
-    wall.map.repeat.set(6, 2);
-    const addWall = (w, h, d, x, y, z) => {
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wall);
-        mesh.position.set(x, FLOOR_Y + y, z);
-        root.add(mesh);
-    };
-    // Back wall with an arch cut through it, off to one side.
-    addWall(40, 16, 2, -14, 8, -36);
-    addWall(24, 16, 2, 22, 8, -36);
-    addWall(10, 5, 2, 5, 13.5, -36);
-    addWall(2, 16, 72, -34, 8, -2);
-    addWall(2, 16, 72, 34, 8, -2);
-    addWall(70, 16, 2, 0, 8, 32);
-    // A darker lintel strip along the tops, so the walls read as built.
-    const trim = new THREE.MeshStandardMaterial({ color: 0xb38e57, roughness: 0.9 });
-    for (const [w, x, z, d] of [[70, 0, -35, 3], [3, -33, -2, 72], [3, 33, -2, 72]]) {
-        const cap = new THREE.Mesh(new THREE.BoxGeometry(w, 1, d), trim);
-        cap.position.set(x, FLOOR_Y + 16.5, z);
-        root.add(cap);
+    const stone = paint(256, sandstone);
+    // Back wall with the arch through to Long.
+    block(root, surface(stone, 7, 3), [34, 16, 2], [-17, 0, -36]);
+    block(root, surface(stone, 5, 3), [24, 16, 2], [22, 0, -36]);
+    block(root, surface(stone, 2, 1), [10, 5, 2], [5, 11, -36]);
+    block(root, surface(stone, 14, 3), [2, 16, 72], [-34, 0, -2]);
+    block(root, surface(stone, 14, 3), [2, 16, 72], [34, 0, -2]);
+    block(root, surface(stone, 14, 3), [70, 16, 2], [0, 0, 32]);
+    const trim = plain(0xb38e57);
+    block(root, trim, [70, 1, 3], [0, 16, -35]);
+    block(root, trim, [3, 1, 72], [-33, 16, -2]);
+    block(root, trim, [3, 1, 72], [33, 16, -2]);
+
+    // Long doors: two heavy wooden double doors swung open in the arch.
+    const door = surface(paint(128, planks('#5b3a22', '#2e1d10')), 2, 1);
+    for (const side of [-1, 1]) {
+        const hinge = new THREE.Group();
+        hinge.position.set(5 + side * 5, FLOOR_Y, -35);
+        const leaf = new THREE.Mesh(new THREE.BoxGeometry(4.8, 10.5, 0.35), door);
+        leaf.position.set(-side * 2.4, 5.25, 0);
+        hinge.add(leaf);
+        hinge.rotation.y = side * 1.15;
+        root.add(hinge);
     }
 
-    const crate = new THREE.MeshStandardMaterial({ map: paint(128, crateTexture), roughness: 0.85 });
-    const crates = [
-        [-22, 1.5, -26, 3, 0.2], [-19, 1.5, -27, 3, -0.1], [-20.5, 4.5, -26.5, 3, 0.35],
-        [24, 2, -24, 4, 0.1], [20, 1.5, -28, 3, -0.3], [-27, 1.5, 6, 3, 0.4], [27, 1.5, 4, 3, -0.2],
-    ];
-    for (const [x, y, z, size, turn] of crates) {
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(size, size, size), crate);
-        mesh.position.set(x, FLOOR_Y + y, z);
-        mesh.rotation.y = turn;
-        root.add(mesh);
-    }
+    // "Blue": the container that sits on Long.
+    const container = surface(paint(128, corrugated('#4f86c2', '#2f5a8c')), 3, 1);
+    block(root, container, [4, 4.2, 9], [-25, 0, -20], 0.12);
+    const crate = surface(paint(128, crateTexture));
+    for (const [x, y, z, size, turn] of [
+        [-19, 0, -27, 3, -0.1], [-22, 0, -26, 3, 0.2], [-20.5, 3, -26.5, 3, 0.35],
+        [24, 0, -24, 4, 0.1], [20, 0, -28, 3, -0.3], [27, 0, 4, 3, -0.2], [26, 3, 4.5, 3, 0.25],
+    ]) block(root, crate, [size, size, size], [x, y, z], turn);
+
+    decal(root, sprayed('A', '#b8321f'), 7, 22, 6.5, -34.9);
+    decal(root, sprayed('←', '#1f1f1f'), 3, -14, 4, -34.9);
 
     return { fog: [0xf1d9a6, 45, 140], halo: 0x3a2a18 };
 }
 
-// The sun for the neon map: a gradient disc with the bottom half cut into
-// bands, the synthwave staple.
-function neonSun(ctx, size) {
-    const g = ctx.createLinearGradient(0, 0, 0, size);
-    g.addColorStop(0, '#ffe066');
-    g.addColorStop(0.55, '#ff7a59');
-    g.addColorStop(1, '#ff2e88');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalCompositeOperation = 'destination-out';
-    for (let i = 0; i < 7; i++) {
-        const y = size * (0.55 + i * 0.065);
-        ctx.fillRect(0, y, size, 2 + i * 1.6);
+/* ----- mirage ----- */
+
+// A Moroccan square: warm plaster, the palace front with its arches and blue
+// shutters, a tiled dome, a market awning, carpets hung out to air, palms.
+function buildMirage(root) {
+    sunAndSky(root, 0x3e7fc4, 0xf6e3c0, 0xe0c291, 0xfff1d8, [25, 32, -5]);
+
+    ground(root, surface(paint(256, pavers('#d7b88a', '#a88a5e', 4)), 60, 60, { roughness: 1 }));
+
+    const plaster = paint(256, speckle('#d9b98a', ['#c19e6c', '#ecd4ab', '#b58f5f'], 2000));
+    const dark = new THREE.MeshBasicMaterial({ color: 0x2a1d12 });
+    const shutter = plain(0x2f7f9a);
+
+    // Palace: a long front across the back with three arches and windows.
+    block(root, surface(plaster, 6, 2), [46, 15, 6], [-4, 0, -40]);
+    for (const x of [-16, -4, 8]) archway(root, dark, 5, 8, x, 0, -36.9);
+    for (const x of [-20, -12, 0, 12, 18]) {
+        block(root, dark, [2, 2.8, 0.2], [x, 10, -36.95]);
+        block(root, shutter, [1.1, 2.8, 0.3], [x - 1.6, 10, -36.8]);
+        block(root, shutter, [1.1, 2.8, 0.3], [x + 1.6, 10, -36.8]);
     }
-    ctx.globalCompositeOperation = 'source-over';
-}
+    block(root, plain(0xc4a171), [47, 1, 7], [-4, 15, -40]);
 
-function ridge(root, z, height, fill, line, seed) {
-    const shape = new THREE.Shape();
-    const points = [];
-    for (let i = 0; i <= 40; i++) {
-        const x = -220 + i * 11;
-        const y = Math.abs(Math.sin(i * 0.9 + seed) * 0.6 + Math.sin(i * 0.37 + seed * 2) * 0.4) * height;
-        points.push(new THREE.Vector3(x, y, 0));
-    }
-    shape.moveTo(-220, 0);
-    for (const p of points) shape.lineTo(p.x, p.y);
-    shape.lineTo(220, 0);
-    const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color: fill, fog: false }));
-    mesh.position.set(0, FLOOR_Y, z);
-    root.add(mesh);
-    const edge = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: line, fog: false }));
-    edge.position.set(0, FLOOR_Y, z + 0.1);
-    root.add(edge);
-}
-
-// Synthwave: a glowing grid running out to a banded sun behind two ranges of
-// mountains. The grid scrolls towards you, slowly.
-function buildNeon(root) {
-    skyDome(root, 0x05030f, 0x3b0f5c, 0x0a0416, 0.45);
-    // Tinted, but not so far that a white chicken turns purple.
-    light(root, 'ambient', 0xd8ccff, 1.25);
-    light(root, 'dir', 0xffb3e6, 1.3, [0, 10, 10]);
-    light(root, 'point', 0x28c7fa, 14, [0, -2, 4]);
-
-    const sun = new THREE.Mesh(
-        new THREE.PlaneGeometry(70, 70),
-        new THREE.MeshBasicMaterial({ map: paint(512, neonSun), transparent: true, fog: false, depthWrite: false })
+    // A tower with a tiled dome, off to the right, and a thin minaret.
+    block(root, surface(plaster, 2, 3), [12, 18, 12], [30, 0, -30]);
+    const dome = new THREE.Mesh(
+        new THREE.SphereGeometry(6, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+        surface(paint(256, zellige), 4, 2, { roughness: 0.4, metalness: 0.1 })
     );
-    sun.position.set(0, 12, -180);
-    root.add(sun);
-    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: GLOW, color: 0xff4f9a, transparent: true, opacity: 0.55,
-        blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
-    }));
-    halo.scale.setScalar(150);
-    halo.position.set(0, 10, -185);
-    root.add(halo);
+    dome.position.set(30, FLOOR_Y + 18, -30);
+    root.add(dome);
+    block(root, surface(plaster, 1, 4), [4, 28, 4], [-32, 0, -34]);
+    block(root, surface(paint(128, zellige), 1, 1), [4.4, 2, 4.4], [-32, 24, -34]);
+    const cap = new THREE.Mesh(new THREE.ConeGeometry(2.6, 4, 4), plain(0x1f7a7a));
+    cap.position.set(-32, FLOOR_Y + 30, -34);
+    cap.rotation.y = Math.PI / 4;
+    root.add(cap);
 
-    ridge(root, -150, 34, 0x1a0630, 0xb14dff, 1.3);
-    ridge(root, -120, 20, 0x0d0418, 0x28c7fa, 4.1);
+    // Side buildings closing in the square.
+    block(root, surface(plaster, 6, 2), [8, 12, 40], [-36, 0, -8]);
+    block(root, surface(plaster, 6, 2), [8, 10, 40], [36, 0, -2]);
 
-    ground(root, new THREE.MeshBasicMaterial({ color: 0x07030f }));
-    const grid = new THREE.GridHelper(480, 120, 0xff2e88, 0xff2e88);
-    grid.position.y = FLOOR_Y + 0.02;
-    grid.material.transparent = true;
-    grid.material.opacity = 0.75;
-    root.add(grid);
+    // Market stall with a striped awning on the left.
+    const stripes = paint(128, (ctx, size) => {
+        for (let i = 0; i < 8; i++) {
+            ctx.fillStyle = i % 2 ? '#e8d6b3' : '#c2462c';
+            ctx.fillRect((i * size) / 8, 0, size / 8, size);
+        }
+    });
+    const awning = new THREE.Mesh(new THREE.PlaneGeometry(10, 5), new THREE.MeshStandardMaterial({ map: stripes, side: THREE.DoubleSide, roughness: 1 }));
+    awning.position.set(-29, FLOOR_Y + 6.5, -10);
+    awning.rotation.set(-Math.PI / 2 + 0.5, 0, Math.PI / 2);
+    root.add(awning);
+    block(root, plain(0x7a5332), [4, 2.4, 9], [-29.5, 0, -10]);
 
-    const cell = 480 / 120;
-    return {
-        fog: [0x2a0b45, 25, 150],
-        halo: 0xff7ad9,
-        update(now) {
-            grid.position.z = ((now / 1000) * 2.2) % cell;
-        },
-    };
+    // Carpets hung over the palace ledge and the right-hand wall.
+    const rug = new THREE.MeshStandardMaterial({ map: paint(128, carpet), side: THREE.DoubleSide, roughness: 1 });
+    for (const [x, y, z, turn] of [[4, 9.5, -36.8, 0], [31.9, 5, -8, -Math.PI / 2], [31.9, 5, 2, -Math.PI / 2]]) {
+        const hang = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 5), rug);
+        hang.position.set(x, FLOOR_Y + y, z);
+        hang.rotation.y = turn;
+        root.add(hang);
+    }
+
+    palm(root, -22, -30);
+    palm(root, 22, -22, 12);
+    palm(root, 26, 18, 10);
+
+    return { fog: [0xf6e3c0, 50, 150], halo: 0x3a2a18 };
 }
 
-// A cold white field: ice pillars, a mountain range in the haze, and snow
-// drifting down through the arena.
-function buildArctic(root) {
-    skyDome(root, 0x7fb0dc, 0xe6eff6, 0xf4f8fb, 0.5);
-    root.add(new THREE.HemisphereLight(0xdfeefa, 0xa9c3d6, 1.7));
-    light(root, 'dir', 0xffffff, 1.7, [30, 14, -20]);
+/* ----- inferno ----- */
 
-    ground(root, new THREE.MeshStandardMaterial({
-        map: paint(256, speckle('#f4f8fb', ['#d6e4ef', '#ffffff', '#c9dbe8'], 1800), 30),
-        roughness: 0.95,
-    }));
+// An Italian hill town: stucco houses under terracotta roofs, green shutters,
+// the church's bell tower over everything, washing strung across the street,
+// cobbles underfoot and cypress trees on green hills beyond.
+function buildInferno(root) {
+    sunAndSky(root, 0x6a9fd0, 0xf4dcae, 0x8fa36a, 0xffe2b0, [-30, 22, 12], 0xdbe7f2, 0x8a7a55);
 
-    const drift = new THREE.MeshStandardMaterial({ color: 0xf7fafc, roughness: 1 });
-    for (const [x, z, w, d] of [[-20, -28, 9, 5], [18, -32, 12, 6], [-32, 8, 8, 10], [30, 0, 10, 7], [4, -44, 16, 6]]) {
-        const mound = new THREE.Mesh(UNIT_BALL, drift);
-        mound.scale.set(w, 1.6, d);
-        mound.position.set(x, FLOOR_Y, z);
+    ground(root, surface(paint(256, cobbles), 50, 50, { roughness: 1 }));
+
+    const tiles = paint(128, terracotta);
+    const shutter = plain(0x4f7a3a);
+    const windowDark = new THREE.MeshBasicMaterial({ color: 0x2b2118 });
+    const house = (x, z, w, h, d, color, turn = 0) => {
+        const wall = surface(paint(128, speckle(color, ['#b38a5a', '#f2e0c0', '#a8845a'], 900)), w / 6, h / 6);
+        const body = block(root, wall, [w, h, d], [x, 0, z], turn);
+        gableRoof(root, surface(tiles, w / 4, 2), w, d, h, x, z, 0.45, turn);
+        // Windows with shutters on the side that faces the square.
+        const face = new THREE.Vector3(0, 0, d / 2 + 0.06).applyAxisAngle(new THREE.Vector3(0, 1, 0), turn);
+        for (let i = 0; i < Math.floor(w / 5); i++) {
+            for (const level of [h * 0.35, h * 0.7]) {
+                const along = new THREE.Vector3(-w / 2 + 2.5 + i * 5, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), turn);
+                const win = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 2.2), windowDark);
+                win.position.set(x + face.x + along.x, FLOOR_Y + level, z + face.z + along.z);
+                win.rotation.y = turn;
+                root.add(win);
+                for (const side of [-1, 1]) {
+                    const s = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.2, 0.15), shutter);
+                    const off = new THREE.Vector3(side * 1.15, 0, 0.05).applyAxisAngle(new THREE.Vector3(0, 1, 0), turn);
+                    s.position.set(win.position.x + off.x, win.position.y, win.position.z + off.z);
+                    s.rotation.y = turn;
+                    root.add(s);
+                }
+            }
+        }
+        return body;
+    };
+
+    house(-20, -36, 18, 12, 10, '#e2c28f');
+    house(4, -40, 16, 15, 10, '#e8d3b0');
+    house(24, -34, 14, 11, 10, '#d9a877');
+    house(-36, -8, 30, 10, 10, '#e5c9a0', Math.PI / 2);
+    house(36, -6, 26, 12, 10, '#d8b184', -Math.PI / 2);
+
+    // The church and its bell tower, rising over the back of the square.
+    const stone = surface(paint(128, speckle('#cbb28a', ['#a88f68', '#e0cda8'], 900)), 1, 4);
+    block(root, stone, [7, 30, 7], [14, 0, -50]);
+    const belfry = new THREE.MeshBasicMaterial({ color: 0x24190f });
+    for (const [dx, dz, turn] of [[0, 3.55, 0], [-3.55, 0, -Math.PI / 2], [3.55, 0, Math.PI / 2]]) {
+        archway(root, belfry, 2.4, 4.5, 14 + dx, 23, -50 + dz, turn);
+    }
+    const spire = new THREE.Mesh(new THREE.ConeGeometry(5.4, 6, 4), surface(tiles, 2, 2));
+    spire.position.set(14, FLOOR_Y + 33, -50);
+    spire.rotation.y = Math.PI / 4;
+    root.add(spire);
+
+    // Washing lines strung across the street.
+    const colors = [0xd94f3d, 0xf2f0e6, 0x3f6fb5, 0xe8c547, 0x5a9a5a];
+    // Strung well behind where targets float, so washing never hides one.
+    for (const [x1, x2, z, y] of [[-31, -12, -30, 10], [-31, -18, -22, 9.5], [31, 14, -24, 10]]) {
+        const line = new THREE.Line(
+            new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(x1, FLOOR_Y + y, z), new THREE.Vector3(x2, FLOOR_Y + y - 0.6, z)]),
+            new THREE.LineBasicMaterial({ color: 0x3a3a3a })
+        );
+        root.add(line);
+        const count = Math.floor(Math.abs(x2 - x1) / 2.2);
+        for (let i = 1; i < count; i++) {
+            const t = i / count;
+            const cloth = new THREE.Mesh(new THREE.PlaneGeometry(1.3, 1.6), plain(colors[i % colors.length], { side: THREE.DoubleSide }));
+            cloth.position.set(lerp(x1, x2, t), FLOOR_Y + y - 0.6 * t - 0.85, z);
+            cloth.rotation.y = Math.sin(i) * 0.3;
+            root.add(cloth);
+        }
+    }
+
+    // Flower boxes on the corners, and hills with cypresses beyond the roofs.
+    for (const [x, z] of [[-25, -30], [22, -28], [-30, 6], [30, 10]]) {
+        block(root, plain(0x7a5332), [2.4, 0.8, 1], [x, 0, z]);
+        for (let i = 0; i < 3; i++) {
+            const bloom = new THREE.Mesh(UNIT_BALL, plain(i % 2 ? 0xc93a3a : 0x4f8a3a));
+            bloom.scale.setScalar(0.45);
+            bloom.position.set(x - 0.7 + i * 0.7, FLOOR_Y + 1.1, z);
+            root.add(bloom);
+        }
+    }
+    const hill = plain(0x7f9a55, { flatShading: true });
+    for (const [x, z, r] of [[-80, -130, 55], [30, -150, 70], [120, -110, 50]]) {
+        const mound = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 8), hill);
+        mound.scale.y = 0.35;
+        mound.position.set(x, FLOOR_Y - 4, z);
         root.add(mound);
     }
+    const cypress = plain(0x2f4f2a, { flatShading: true });
+    for (let i = 0; i < 12; i++) {
+        const c = new THREE.Mesh(new THREE.ConeGeometry(1.8, 12, 6), cypress);
+        c.position.set(-90 + i * 17, FLOOR_Y + 14 + Math.sin(i) * 3, -110 - (i % 3) * 12);
+        root.add(c);
+    }
 
-    const ice = new THREE.MeshStandardMaterial({
-        color: 0xa9dcef, roughness: 0.12, metalness: 0.05,
-        transparent: true, opacity: 0.86, emissive: 0x0b3140, emissiveIntensity: 0.4,
-    });
-    const pillar = new THREE.CylinderGeometry(1, 1.2, 1, 6);
-    for (let i = 0; i < 14; i++) {
-        const a = (i / 14) * Math.PI * 2 + 0.3;
-        const r = 26 + (i % 3) * 7;
-        const h = 7 + ((i * 37) % 13);
-        const mesh = new THREE.Mesh(pillar, ice);
-        mesh.scale.set(1.2 + (i % 2), h, 1.2 + (i % 2));
-        mesh.position.set(Math.sin(a) * r, FLOOR_Y + h / 2, -Math.cos(a) * r);
-        mesh.rotation.set((i % 3 - 1) * 0.08, i, (i % 2 - 0.5) * 0.12);
+    return { fog: [0xf4dcae, 55, 170], halo: 0x3a2a18 };
+}
+
+/* ----- nuke ----- */
+
+// The plant: the reactor's containment dome, a blue corrugated warehouse with
+// the radiation sign, hazard stripes, stacked shipping containers, pipework
+// and painted yard lines, under a flat pale sky.
+function buildNuke(root) {
+    sunAndSky(root, 0x8fb0cc, 0xd8e0e6, 0xa7adb0, 0xffffff, [15, 30, 20], 0xe4ecf2, 0x8a8f94);
+
+    ground(root, surface(paint(256, speckle('#9fa3a3', ['#868a8b', '#b5b9b9', '#7a7e7f'], 2400)), 40, 40, { roughness: 1 }));
+    const paintLine = new THREE.MeshBasicMaterial({ color: 0xe0b52a });
+    for (const [w, d, x, z] of [[0.5, 60, -6, -10], [0.5, 60, 6, -10], [40, 0.5, 0, -24]]) {
+        const stripe = new THREE.Mesh(new THREE.PlaneGeometry(w, d), paintLine);
+        stripe.rotation.x = -Math.PI / 2;
+        stripe.position.set(x, FLOOR_Y + 0.02, z);
+        root.add(stripe);
+    }
+
+    const concrete = paint(256, speckle('#c9ccce', ['#b0b4b6', '#dcdfe0'], 1500));
+    // Containment: a squat cylinder with a dome, behind the yard on the left.
+    const silo = new THREE.Mesh(new THREE.CylinderGeometry(16, 16, 20, 48), surface(concrete, 6, 2));
+    silo.position.set(-26, FLOOR_Y + 10, -62);
+    root.add(silo);
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(16, 48, 16, 0, Math.PI * 2, 0, Math.PI / 2), surface(concrete, 6, 2));
+    dome.position.set(-26, FLOOR_Y + 20, -62);
+    root.add(dome);
+    for (let i = 0; i < 3; i++) {
+        const band = new THREE.Mesh(new THREE.TorusGeometry(16.05, 0.25, 6, 64), plain(0x9ea3a6));
+        band.rotation.x = Math.PI / 2;
+        band.position.set(-26, FLOOR_Y + 4 + i * 6, -62);
+        root.add(band);
+    }
+
+    // The warehouse across the back and down the right.
+    const siding = paint(128, corrugated('#4f7fae', '#2f587f'));
+    block(root, surface(siding, 12, 2), [44, 14, 12], [16, 0, -40]);
+    block(root, surface(siding, 12, 2), [12, 12, 40], [38, 0, -6]);
+    block(root, plain(0x2f587f), [45, 1, 13], [16, 14, -40]);
+    block(root, surface(paint(128, corrugated('#8a8f93', '#5f6468')), 4, 1), [12, 9, 0.3], [10, 0, -33.9]);
+    decal(root, radiation, 5, 26, 9, -33.8);
+    const stripes = paint(128, hazard);
+    block(root, surface(stripes, 10, 1), [44.2, 1.2, 12.2], [16, 0, -40]);
+    block(root, surface(stripes, 10, 1), [12.2, 1.2, 40.2], [38, 0, -6]);
+
+    // Pipes along the warehouse front.
+    for (const [y, color] of [[10, 0xc9ccce], [11.2, 0xe0b52a]]) {
+        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 44, 12), plain(color, { metalness: 0.4, roughness: 0.5 }));
+        pipe.rotation.z = Math.PI / 2;
+        pipe.position.set(16, FLOOR_Y + y, -33.3);
+        root.add(pipe);
+    }
+
+    // Shipping containers stacked on the left of the yard.
+    const box = (colors) => surface(paint(128, corrugated(colors[0], colors[1])), 4, 1);
+    block(root, box(['#c8642d', '#8f3f18']), [5, 5, 12], [-30, 0, -22], 0.05);
+    block(root, box(['#3f7a4a', '#2a5332']), [5, 5, 12], [-30, 5, -21], -0.04);
+    block(root, box(['#9b2f2f', '#6b1f1f']), [5, 5, 12], [-24, 0, -30], Math.PI / 2 + 0.1);
+
+    // Floodlight poles.
+    for (const x of [-12, 30]) {
+        block(root, plain(0x6f7477, { metalness: 0.5 }), [0.5, 18, 0.5], [x, 0, -30]);
+        block(root, plain(0xf2f0e6, { emissive: 0xffffff, emissiveIntensity: 0.6 }), [2.4, 1, 1], [x, 17.5, -29.6]);
+    }
+
+    return { fog: [0xd8e0e6, 50, 170], halo: 0x2a2f33 };
+}
+
+/* ----- vertigo ----- */
+
+// The top of a tower under construction: a bare concrete floor with nothing
+// round its edge but rails, scaffold and a crane, and the city a long way down.
+function buildVertigo(root) {
+    skyDome(root, 0x3f7fc6, 0xc9dcec, 0x9fb4c6, 0.5);
+    root.add(new THREE.HemisphereLight(0xdcebf7, 0x6f7f8c, 1.5));
+    light(root, 'dir', 0xfff4e0, 2.3, [-25, 30, 15]);
+    light(root, 'ambient', 0xffffff, 0.25);
+
+    // The slab, and the storey below it, in bare concrete.
+    const slab = paint(256, speckle('#a9a9a4', ['#8f8f8a', '#c2c2bd', '#7c7c77'], 2400));
+    block(root, surface(slab, 10, 10, { roughness: 1 }), [60, 1, 70], [0, -1, -10]);
+    block(root, surface(slab, 10, 2), [58, 6, 68], [0, -7, -10]);
+    const column = surface(slab, 1, 3);
+    // Columns along the back, and only at the sides further forward, so the
+    // middle of the view stays open.
+    for (const x of [-26, -9, 9, 26]) block(root, column, [1.6, 12, 1.6], [x, 0, -42]);
+    for (const x of [-26, 26]) block(root, column, [1.6, 12, 1.6], [x, 0, -20]);
+    // Rebar sticking out of the column tops.
+    const rebar = plain(0x7a4a2c, { metalness: 0.5 });
+    for (const x of [-26, -9, 9, 26]) {
+        for (let i = 0; i < 4; i++) block(root, rebar, [0.12, 2, 0.12], [x - 0.4 + (i % 2) * 0.8, 12, -42 - 0.4 + Math.floor(i / 2) * 0.8]);
+    }
+
+    // Safety rail round the edge, striped.
+    const rail = surface(paint(128, hazard), 8, 1);
+    for (const [w, d, x, z] of [[60, 0.3, 0, -45], [0.3, 70, -30, -10], [0.3, 70, 30, -10]]) {
+        block(root, rail, [w, 0.4, d], [x, 3.2, z]);
+        block(root, rail, [w, 0.3, d], [x, 1.6, z]);
+    }
+    const post = plain(0xe8b923);
+    for (let x = -30; x <= 30; x += 6) block(root, post, [0.25, 3.6, 0.25], [x, 0, -45]);
+
+    // Scaffold tower on the right: a lattice of orange tube.
+    const tubeMat = plain(0xd9731f, { metalness: 0.4, roughness: 0.6 });
+    for (let level = 0; level < 5; level++) {
+        for (const [x, z] of [[22, -32], [28, -32], [22, -26], [28, -26]]) block(root, tubeMat, [0.25, 4, 0.25], [x, level * 4, z]);
+        for (const z of [-32, -26]) block(root, tubeMat, [6, 0.25, 0.25], [25, level * 4 + 4, z]);
+        block(root, plain(0x8a6a44), [6.4, 0.3, 6.4], [25, level * 4 + 3.9, -29]);
+    }
+
+    // The tower crane, well back, over everything.
+    const crane = plain(0xe8b923, { metalness: 0.3 });
+    block(root, crane, [2.2, 60, 2.2], [-20, -10, -70]);
+    block(root, crane, [70, 1.6, 1.6], [-5, 48, -70]);
+    block(root, crane, [14, 1.6, 1.6], [-33, 48, -70]);
+    block(root, plain(0x6f7477), [4, 4, 4], [-38, 44, -70]);
+    block(root, plain(0x2f3a45), [3, 3, 3], [-20, 50, -70]);
+    const cable = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(18, FLOOR_Y + 48, -70), new THREE.Vector3(18, FLOOR_Y + 30, -70)]),
+        new THREE.LineBasicMaterial({ color: 0x333333 })
+    );
+    root.add(cable);
+    block(root, plain(0x3b6fa8), [3, 2, 3], [18, 27.5, -70]);
+
+    // Pallets and a tarp-covered pile on the deck.
+    block(root, plain(0x2f5f9a), [5, 1.8, 4], [-20, 0, -30], 0.2);
+    block(root, plain(0x8a6a44), [3, 0.5, 3], [16, 0, -12]);
+    block(root, plain(0xcfc9b8), [2.6, 1.4, 2.6], [16, 0.5, -12]);
+
+    // The city far below: towers of glass and concrete in every direction,
+    // lost in the haze at the bottom.
+    const skins = [
+        paint(128, facade('#6f7b86', '#22303c', 0.12)),
+        paint(128, facade('#9a9486', '#2d3640', 0.1)),
+        paint(128, facade('#3d5870', '#182430', 0.18)),
+    ];
+    const cityMats = skins.map((t) => surface(t, 2, 4, { roughness: 0.6 }));
+    for (let i = 0; i < 70; i++) {
+        const a = (i / 70) * Math.PI * 2 + Math.sin(i) * 0.2;
+        const r = 55 + ((i * 53) % 110);
+        const w = 10 + (i % 4) * 4;
+        const top = -30 - ((i * 31) % 70) + (i % 5 === 0 ? 62 : 0);
+        const h = 140 + top;
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, w), cityMats[i % cityMats.length]);
+        mesh.position.set(Math.sin(a) * r, FLOOR_Y + top - h / 2, -Math.cos(a) * r);
         root.add(mesh);
     }
 
-    const peak = new THREE.MeshStandardMaterial({ color: 0xdfe9f2, roughness: 1, flatShading: true });
-    for (const [x, z, r, h] of [[-70, -130, 40, 50], [-10, -150, 50, 70], [60, -135, 42, 55], [120, -110, 36, 40], [-130, -100, 36, 44]]) {
-        const mountain = new THREE.Mesh(new THREE.ConeGeometry(r, h, 7), peak);
-        mountain.position.set(x, FLOOR_Y + h / 2, z);
-        root.add(mountain);
-    }
+    return { fog: [0xc9dcec, 70, 220], halo: 0x1f2a33 };
+}
 
-    // Snow: points in a box round the player, falling and drifting sideways,
-    // wrapped back to the top when they reach the ground.
-    const COUNT = 1400;
-    const positions = new Float32Array(COUNT * 3);
-    for (let i = 0; i < COUNT; i++) {
-        positions[i * 3] = (Math.random() - 0.5) * 70;
-        positions[i * 3 + 1] = FLOOR_Y + Math.random() * 30;
-        positions[i * 3 + 2] = (Math.random() - 0.5) * 70;
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    // A soft round flake rather than the default square point.
-    const flake = paint(64, (ctx, size) => {
-        const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-        g.addColorStop(0, 'rgba(255, 255, 255, 1)');
-        g.addColorStop(0.5, 'rgba(255, 255, 255, 0.8)');
-        g.addColorStop(1, 'rgba(255, 255, 255, 0)');
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, size, size);
-    });
-    const snow = new THREE.Points(geometry, new THREE.PointsMaterial({
-        map: flake, color: 0xffffff, size: 0.22, transparent: true, opacity: 0.95, depthWrite: false,
+/* ----- ancient ----- */
+
+// A temple in the rainforest: a stepped pyramid with its stair and shrine,
+// the orange of A site and the pale-blue water of B, carved pillars, and
+// jungle closing in all round.
+function buildAncient(root) {
+    sunAndSky(root, 0x8fb8c9, 0xdfe6d4, 0x5d6f45, 0xfff1d0, [20, 28, 10], 0xdce8e0, 0x4f6a35);
+
+    ground(root, new THREE.MeshStandardMaterial({
+        map: paint(256, speckle('#5f7a3c', ['#4a6230', '#7a8f4a', '#6b5a3a', '#3f5428'], 3000), 40),
+        roughness: 1,
     }));
-    root.add(snow);
+    const plaza = new THREE.Mesh(new THREE.CircleGeometry(24, 48), surface(paint(256, pavers('#9a9c88', '#6d6f5e', 4)), 8, 8));
+    plaza.rotation.x = -Math.PI / 2;
+    plaza.position.set(0, FLOOR_Y + 0.03, -12);
+    root.add(plaza);
 
-    return {
-        fog: [0xe6eff6, 35, 170],
-        halo: 0x2b3a48,
-        update(now, dt) {
-            const p = geometry.attributes.position.array;
-            for (let i = 0; i < COUNT; i++) {
-                p[i * 3 + 1] -= dt * (1.4 + (i % 5) * 0.25);
-                p[i * 3] += Math.sin(now / 1400 + i) * dt * 0.4;
-                if (p[i * 3 + 1] < FLOOR_Y) p[i * 3 + 1] += 30;
-            }
-            geometry.attributes.position.needsUpdate = true;
-        },
-    };
-}
-
-function planetBands(ctx, size) {
-    const colors = ['#c98a4b', '#e2b27a', '#a8683a', '#f0cf9a', '#b8773f', '#d99c5c', '#8f5530'];
-    let y = 0;
-    let i = 0;
-    while (y < size) {
-        const h = 6 + Math.random() * 26;
-        ctx.fillStyle = colors[i++ % colors.length];
-        ctx.fillRect(0, y, size, h);
-        y += h;
+    // The pyramid: stacked tiers, a stair up the front, a shrine on top.
+    const carved = paint(256, glyphs);
+    for (let i = 0; i < 6; i++) {
+        const w = 44 - i * 7;
+        block(root, surface(carved, w / 6, 1), [w, 4, w * 0.8], [0, i * 4, -70]);
     }
-    speckle('rgba(0,0,0,0)', ['#6e3f1f', '#ffe2b4'], 900, size)(ctx);
-}
+    const stair = plain(0x8f917d);
+    for (let i = 0; i < 24; i++) block(root, stair, [8, 1, 1.2], [0, i, -70 + 17.6 - i * 0.62]);
+    block(root, surface(carved, 2, 1), [8, 6, 7], [0, 24, -70]);
+    archway(root, new THREE.MeshBasicMaterial({ color: 0x1d1a14 }), 3, 4.5, 0, 24, -66.4);
+    block(root, plain(0xd9731f), [9, 1, 8], [0, 30, -70]);
 
-function ringBands(ctx, size) {
-    const c = size / 2;
-    for (let r = c; r > 0; r -= 2) {
-        const t = r / c;
-        const alpha = t < 0.7 ? 0 : 0.25 + Math.abs(Math.sin(r * 0.37)) * 0.55;
-        ctx.fillStyle = `rgba(230, 200, 160, ${alpha})`;
-        ctx.beginPath();
-        ctx.arc(c, c, r, 0, Math.PI * 2);
-        ctx.fill();
-    }
-}
-
-// Open space: a starfield, a ringed planet, a faint nebula, and a lit platform
-// to stand on.
-function buildSpace(root) {
-    skyDome(root, 0x03040c, 0x0a0e26, 0x02030a, 0.8);
-    light(root, 'ambient', 0x9aa8ff, 0.7);
-    light(root, 'dir', 0xfff2dd, 2.4, [40, 20, -10]);
-    light(root, 'point', 0x5fd4ff, 12, [0, -4, -6]);
-
-    const starLayer = (count, size, radius) => {
-        const positions = new Float32Array(count * 3);
-        for (let i = 0; i < count; i++) {
-            const v = new THREE.Vector3().randomDirection().multiplyScalar(radius);
-            positions.set([v.x, v.y, v.z], i * 3);
-        }
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        const points = new THREE.Points(geometry, new THREE.PointsMaterial({
-            color: 0xffffff, size, sizeAttenuation: false, fog: false, transparent: true, depthWrite: false,
-        }));
-        root.add(points);
-        return points;
-    };
-    const far = starLayer(2400, 1.2, 180);
-    const near = starLayer(500, 2.2, 170);
-
-    for (const [x, y, z, color, s] of [[-60, 30, -150, 0x6b3cff, 140], [80, -10, -160, 0x1e8bff, 120], [10, 60, -170, 0xff4fa0, 90]]) {
-        const cloud = new THREE.Sprite(new THREE.SpriteMaterial({
-            map: GLOW, color, transparent: true, opacity: 0.22,
-            blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
-        }));
-        cloud.scale.setScalar(s);
-        cloud.position.set(x, y, z);
-        root.add(cloud);
+    // A site: orange-painted stone and banners on the left.
+    const orange = plain(0xd9731f);
+    block(root, surface(carved, 2, 1), [10, 3, 10], [-26, 0, -30]);
+    block(root, orange, [10.2, 0.6, 10.2], [-26, 3, -30]);
+    for (const x of [-30, -22]) {
+        const banner = new THREE.Mesh(new THREE.PlaneGeometry(2, 6), plain(0xd9731f, { side: THREE.DoubleSide }));
+        banner.position.set(x, FLOOR_Y + 8, -24.9);
+        root.add(banner);
+        block(root, surface(carved, 1, 3), [2.4, 12, 2.4], [x, 0, -26]);
     }
 
-    const planet = new THREE.Group();
-    planet.position.set(-20, 52, -140);
-    planet.add(new THREE.Mesh(
-        new THREE.SphereGeometry(24, 48, 32),
-        new THREE.MeshStandardMaterial({ map: paint(256, planetBands), roughness: 0.9 })
-    ));
-    const rings = new THREE.Mesh(
-        new THREE.RingGeometry(30, 46, 96),
-        new THREE.MeshBasicMaterial({ map: paint(512, ringBands), transparent: true, side: THREE.DoubleSide, depthWrite: false })
+    // B site: a shallow pool of pale-blue water edged in stone, on the right.
+    block(root, surface(carved, 3, 1), [16, 1.2, 12], [26, 0, -24]);
+    const water = new THREE.Mesh(
+        new THREE.PlaneGeometry(14, 10),
+        new THREE.MeshStandardMaterial({ color: 0x8fd3e0, roughness: 0.1, metalness: 0.2, transparent: true, opacity: 0.9 })
     );
-    rings.rotation.set(-1.2, 0.3, 0.2);
-    planet.add(rings);
-    root.add(planet);
+    water.rotation.x = -Math.PI / 2;
+    water.position.set(26, FLOOR_Y + 1.25, -24);
+    root.add(water);
 
-    const moon = new THREE.Mesh(
-        new THREE.SphereGeometry(4, 32, 16),
-        new THREE.MeshStandardMaterial({ map: paint(128, speckle('#b9bcc6', ['#8d909b', '#d9dce4'], 700)), roughness: 1 })
-    );
-    moon.position.set(48, 34, -110);
-    root.add(moon);
+    // Broken pillars scattered round the plaza.
+    for (const [x, z, h] of [[-14, -34, 7], [14, -36, 5], [-34, -6, 9], [34, -2, 6], [-10, 14, 4]]) {
+        block(root, surface(carved, 1, 2), [2.2, h, 2.2], [x, 0, z], x * 0.1);
+    }
 
-    const deck = new THREE.Mesh(
-        new THREE.CylinderGeometry(22, 20, 1, 64),
-        new THREE.MeshStandardMaterial({ color: 0x1b1f2a, metalness: 0.6, roughness: 0.4 })
-    );
-    deck.position.y = FLOOR_Y - 0.5;
-    root.add(deck);
-    const rim = new THREE.Mesh(
-        new THREE.TorusGeometry(22, 0.18, 8, 96),
-        new THREE.MeshBasicMaterial({ color: 0x5fd4ff })
-    );
-    rim.rotation.x = Math.PI / 2;
-    rim.position.y = FLOOR_Y;
-    root.add(rim);
-    const lines = new THREE.PolarGridHelper(21, 16, 6, 64, 0x5fd4ff, 0x2d6f8f);
-    lines.position.y = FLOOR_Y + 0.02;
-    lines.material.transparent = true;
-    lines.material.opacity = 0.35;
-    root.add(lines);
+    // Jungle: trees and hanging vines all the way round, big leaves below.
+    const leaves = [plain(0x2f5a24, { flatShading: true }), plain(0x3f7030, { flatShading: true }), plain(0x24461c, { flatShading: true })];
+    for (let i = 0; i < 26; i++) {
+        const a = (i / 26) * Math.PI * 2;
+        const r = 40 + (i % 4) * 9;
+        const x = Math.sin(a) * r;
+        const z = -Math.cos(a) * r - 10;
+        // Not through the pyramid.
+        if (Math.abs(x) < 26 && z < -48) continue;
+        tree(root, x, z, 14 + (i % 5) * 3, leaves);
+    }
+    const vine = plain(0x2f5a24);
+    for (let i = 0; i < 16; i++) {
+        const a = (i / 16) * Math.PI * 2 + 0.2;
+        block(root, vine, [0.15, 6 + (i % 4) * 2, 0.15], [Math.sin(a) * 38, 10, -Math.cos(a) * 38 - 10]);
+    }
+    const frond = plain(0x3f7a2e, { flatShading: true });
+    for (let i = 0; i < 20; i++) {
+        const a = (i / 20) * Math.PI * 2;
+        const leaf = new THREE.Mesh(UNIT_BALL, frond);
+        leaf.scale.set(2.4, 0.5, 1.2);
+        leaf.position.set(Math.sin(a) * 30, FLOOR_Y + 0.4, -Math.cos(a) * 30 - 10);
+        leaf.rotation.y = a;
+        root.add(leaf);
+    }
 
-    return {
-        fog: null,
-        halo: 0xf0e9dd,
-        update(now) {
-            far.rotation.y = now / 400000;
-            near.rotation.y = now / 260000;
-            near.material.opacity = 0.75 + Math.sin(now / 700) * 0.2;
-            planet.rotation.y = now / 90000;
-        },
-    };
+    return { fog: [0xdfe6d4, 40, 150], halo: 0x2a2f1c };
 }
 
 const MAPS = [
-    { id: 'range', label: 'range', build: buildRange, defaults: { background: 0x121312, fog: [0x121312, 18, 46], halo: INK } },
-    { id: 'dust', label: 'dust', build: buildDust },
-    { id: 'neon', label: 'neon', build: buildNeon },
-    { id: 'arctic', label: 'arctic', build: buildArctic },
-    { id: 'space', label: 'space', build: buildSpace },
+    { id: 'training', label: 'training', build: buildRange, defaults: { background: 0x121312, fog: [0x121312, 18, 46], halo: INK } },
+    { id: 'dust2', label: 'dust ii', build: buildDust2 },
+    { id: 'mirage', label: 'mirage', build: buildMirage },
+    { id: 'inferno', label: 'inferno', build: buildInferno },
+    { id: 'nuke', label: 'nuke', build: buildNuke },
+    { id: 'vertigo', label: 'vertigo', build: buildVertigo },
+    { id: 'ancient', label: 'ancient', build: buildAncient },
 ];
 
 let mapKind = MAPS[0];
@@ -2219,6 +2677,57 @@ function lockPicks(locked) {
     for (const chip of [...elGuns.children, ...elTargets.children, ...elMaps.children]) chip.disabled = locked;
 }
 
+/* ---------- crosshair ---------- */
+
+const CROSSHAIRS = [
+    { id: 'classic', label: 'classic' },
+    { id: 'plus', label: 'plus' },
+    { id: 't', label: 't' },
+    { id: 'dot', label: 'dot' },
+    { id: 'circle', label: 'circle' },
+];
+
+// The csgo green first, then a few that stand out on every map.
+const XH_COLORS = [
+    { id: 'green', label: 'green', value: '#3cff3c' },
+    { id: 'cream', label: 'cream', value: '#f0e9dd' },
+    { id: 'yellow', label: 'yellow', value: '#ffe14d' },
+    { id: 'cyan', label: 'cyan', value: '#4de3ff' },
+    { id: 'pink', label: 'pink', value: '#ff5cb8' },
+    { id: 'red', label: 'red', value: '#ff4a3d' },
+];
+
+let xhStyle = CROSSHAIRS[0].id;
+let xhColor = XH_COLORS[0];
+
+// The real crosshair and the menu's copy always match.
+function applyCrosshair() {
+    for (const el of [crosshair, elXhPreview]) {
+        el.dataset.style = xhStyle;
+        el.style.setProperty('--xh', xhColor.value);
+    }
+}
+
+function buildSwatches() {
+    elXhColors.replaceChildren();
+    for (const color of XH_COLORS) {
+        const swatch = document.createElement('button');
+        swatch.type = 'button';
+        swatch.className = 'aim-swatch';
+        swatch.setAttribute('role', 'radio');
+        swatch.setAttribute('aria-label', color.label);
+        swatch.setAttribute('aria-checked', String(color === xhColor));
+        swatch.style.background = color.value;
+        swatch.addEventListener('click', () => {
+            for (const other of elXhColors.children) other.setAttribute('aria-checked', String(other === swatch));
+            xhColor = color;
+            remember(XH_COLOR_KEY, color.id);
+            applyCrosshair();
+        });
+        elXhColors.append(swatch);
+    }
+}
+
 function updateHint() {
     if (touchOnly) {
         elHint.textContent = `tap the ${targetKind.id === 'bullseye' ? 'targets' : `${targetKind.label}s`} · tap the gun to inspect it`;
@@ -2444,6 +2953,15 @@ buildChips(elGuns, WEAPONS, weapon.id, (id) => {
     remember(GUN_KEY, id);
     updateHint();
 });
+xhStyle = (CROSSHAIRS.find((c) => c.id === recall(XH_KEY)) || CROSSHAIRS[0]).id;
+xhColor = XH_COLORS.find((c) => c.id === recall(XH_COLOR_KEY)) || XH_COLORS[0];
+buildChips(elCrosshairs, CROSSHAIRS, xhStyle, (id) => {
+    xhStyle = id;
+    remember(XH_KEY, id);
+    applyCrosshair();
+});
+buildSwatches();
+applyCrosshair();
 buildChips(elMaps, MAPS, mapKind.id, (id) => {
     selectMap(id);
     remember(MAP_KEY, id);
