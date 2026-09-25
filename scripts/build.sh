@@ -36,4 +36,14 @@ rsync -a . _site/ \
 # out of the build: a static asset is readable by anyone, and the /api gate
 # would not apply. Those two live only in KV, loaded by `npm run seed`.
 
+# Fingerprint the stylesheet and the top-level scripts in every page, so a
+# deploy changes their URLs. GitHub Pages lets browsers cache them for ten
+# minutes, and without this a visitor can get new HTML against an old
+# stylesheet. perl rather than sed -i, which differs between macOS and Linux.
+for asset in styles.css *.js; do
+  [ -f "$asset" ] || continue
+  hash=$(shasum "$asset" | cut -c1-8)
+  perl -pi -e "s#(href|src)=\"\Q$asset\E\"#\$1=\"$asset?v=$hash\"#g" _site/*.html
+done
+
 echo "staged $(find _site -type f | wc -l | tr -d ' ') files into _site/"
