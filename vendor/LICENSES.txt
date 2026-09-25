@@ -9,6 +9,17 @@ three.js 0.180.0 - three/three.module.min.js, three/three.core.min.js
   https://github.com/mrdoob/three.js
   Used by the aim trainer on /aim.
 
+three.js 0.180.0 addons - three/addons/loaders/GLTFLoader.js,
+  three/addons/utils/BufferGeometryUtils.js
+  MIT License, Copyright 2010-2025 Three.js Authors
+  https://github.com/mrdoob/three.js
+  Their `from 'three'` import is rewritten to the local three.module.min.js.
+
+Kenney Furniture Kit 2.0 - models/kenney/*.glb (33 of the kit's models)
+  Creative Commons Zero (CC0), by Kenney, www.kenney.nl
+  https://kenney.nl/assets/furniture-kit
+  Furniture inside the aim trainer's bots-mode buildings. See models/kenney/License.txt.
+
 canvas-confetti 1.9.4 - confetti.min.js
   ISC License, Copyright (c) 2020, Kiril Vatev
   https://github.com/catdad/canvas-confetti

@@ -41,6 +41,39 @@ const RESPAWN_MS = 3000;
 const BOT_RESPAWN_MS = 4500;
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// Anything standing on the floor and taller than a step blocks movement, lines
+// of sight and bullets, as a box. Read off the map's meshes, so every map works
+// without hand-placed collision. aim.js calls this before it merges the map's
+// meshes for drawing, since after that there are no separate pieces left to
+// read; from then on collision only ever deals in these boxes.
+export function collectColliders(envRoot, floorY) {
+    const colliders = [];
+    envRoot.updateMatrixWorld(true);
+    const box = new THREE.Box3();
+    envRoot.traverse((o) => {
+        if (!o.isMesh || o.userData.noCollide) return;
+        let up = o;
+        while (up) {
+            if (up.userData.noCollide) return;
+            up = up.parent;
+        }
+        box.setFromObject(o);
+        const h = box.max.y - box.min.y;
+        const w = box.max.x - box.min.x;
+        const d = box.max.z - box.min.z;
+        // Raised floors, roofs and landings are flagged walkable: they count
+        // however high they are, and however thin.
+        const walkable = o.userData.walkable;
+        if (!walkable && (h < 1 || w > 110 || d > 110)) return;
+        if (!walkable && (box.min.y > floorY + 5 || box.max.y < floorY + 1.2)) return;
+        colliders.push({
+            minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z,
+            minY: box.min.y, top: box.max.y,
+        });
+    });
+    return colliders;
+}
 const easeOut = (t) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 const rand = (lo, hi) => lo + Math.random() * (hi - lo);
 const UP = new THREE.Vector3(0, 1, 0);
@@ -55,7 +88,6 @@ export function createBots(ctx) {
     let botCount = 5;
     let bounds = [-30, 30, -30, 30];
     let colliders = [];
-    let colliderMeshes = [];
     let active = false;
 
     const player = {
@@ -73,31 +105,37 @@ export function createBots(ctx) {
 
     /* ---------- the map as something to walk into ---------- */
 
-    // Anything standing on the floor and taller than a step blocks movement,
-    // lines of sight and bullets. Read off the map's meshes, so every map works
-    // without hand-placed collision.
-    function rebuildColliders() {
-        colliders = [];
-        colliderMeshes = [];
-        envRoot.updateMatrixWorld(true);
-        const box = new THREE.Box3();
-        envRoot.traverse((o) => {
-            if (!o.isMesh || o.userData.noCollide) return;
-            box.setFromObject(o);
-            const h = box.max.y - box.min.y;
-            const w = box.max.x - box.min.x;
-            const d = box.max.z - box.min.z;
-            // Raised floors, roofs and landings are flagged walkable: they count
-            // however high they are, and however thin.
-            const walkable = o.userData.walkable;
-            if (!walkable && (h < 1 || w > 110 || d > 110)) return;
-            if (!walkable && (box.min.y > floorY + 5 || box.max.y < floorY + 1.2)) return;
-            colliders.push({
-                minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z,
-                minY: box.min.y, top: box.max.y,
-            });
-            colliderMeshes.push(o);
-        });
+    function setColliders(list) {
+        colliders = list || [];
+    }
+
+    // The nearest collision box a ray reaches within `far`, with the point and
+    // the face normal where it went in. Boxes are few enough to just test all.
+    const worldBox = new THREE.Box3();
+    const boxPoint = new THREE.Vector3();
+    function rayHitsWorld(ray, far) {
+        let best = null;
+        for (const c of colliders) {
+            worldBox.min.set(c.minX, c.minY, c.minZ);
+            worldBox.max.set(c.maxX, c.top, c.maxZ);
+            if (!ray.intersectBox(worldBox, boxPoint)) continue;
+            const d = boxPoint.distanceTo(ray.origin);
+            if (d < 1e-3 || d > far || (best && d >= best.distance)) continue;
+            best = { distance: d, point: boxPoint.clone(), c };
+        }
+        if (best) best.normal = boxNormal(best.point, best.c);
+        return best;
+    }
+
+    // Which face of the box a point on it is on.
+    function boxNormal(p, c) {
+        const faces = [
+            [Math.abs(p.x - c.minX), -1, 0, 0], [Math.abs(p.x - c.maxX), 1, 0, 0],
+            [Math.abs(p.y - c.minY), 0, -1, 0], [Math.abs(p.y - c.top), 0, 1, 0],
+            [Math.abs(p.z - c.minZ), 0, 0, -1], [Math.abs(p.z - c.maxZ), 0, 0, 1],
+        ];
+        faces.sort((a, b) => a[0] - b[0]);
+        return new THREE.Vector3(faces[0][1], faces[0][2], faces[0][3]);
     }
 
     // Circle-versus-box in the ground plane. Things low enough to step onto
@@ -170,7 +208,7 @@ export function createBots(ctx) {
         return best || new THREE.Vector3(0, floorY, 0);
     }
 
-    const sightRay = new THREE.Raycaster();
+    const sightRay = new THREE.Ray();
     const tmpA = new THREE.Vector3();
     const tmpB = new THREE.Vector3();
 
@@ -178,8 +216,7 @@ export function createBots(ctx) {
         tmpA.subVectors(to, from);
         const dist = tmpA.length();
         sightRay.set(from, tmpA.normalize());
-        sightRay.far = dist;
-        return sightRay.intersectObjects(colliderMeshes, false).length === 0;
+        return !rayHitsWorld(sightRay, dist);
     }
 
     /* ---------- the bots ---------- */
@@ -461,18 +498,12 @@ export function createBots(ctx) {
     const bloodDecal = decalPool(24, splatTexture, 3.2);
     const holeDecal = decalPool(60, holeTexture, 0.45);
 
-    const normalOf = (hit) => {
-        const n = hit.face ? hit.face.normal.clone() : UP.clone();
-        return n.transformDirection(hit.object.matrixWorld);
-    };
-
     // Blood thrown onto whatever is behind the hit: the wall if one is close,
     // otherwise the floor where the body lands.
     function splatter(point, dir) {
         sightRay.set(point, tmpA.copy(dir).setY(0).normalize());
-        sightRay.far = 16;
-        const wall = sightRay.intersectObjects(colliderMeshes, false)[0];
-        if (wall) bloodDecal(wall.point, normalOf(wall), rand(0.8, 1.3));
+        const wall = rayHitsWorld(sightRay, 16);
+        if (wall) bloodDecal(wall.point, wall.normal, rand(0.8, 1.3));
     }
 
     const tracers = [];
@@ -643,7 +674,7 @@ export function createBots(ctx) {
         root.updateMatrixWorld(true);
         shotRay.ray.copy(ray);
         shotRay.far = 400;
-        const wall = shotRay.intersectObjects(colliderMeshes, false)[0];
+        const wall = rayHitsWorld(ray, 400);
         let best = null;
         for (const bot of bots) {
             if (!bot.alive) continue;
@@ -671,7 +702,7 @@ export function createBots(ctx) {
             return { hit: true, kill: false, headshot };
         }
         if (wall) {
-            const n = normalOf(wall);
+            const n = wall.normal;
             holeDecal(wall.point, n, rand(0.8, 1.2));
             spray(wall.point, n, 5, 5, dustMat, 1, 0.4);
         }
@@ -1088,7 +1119,6 @@ export function createBots(ctx) {
     }
 
     function start() {
-        rebuildColliders();
         clearEffects();
         removeBots();
         stats.kills = 0;
@@ -1136,7 +1166,7 @@ export function createBots(ctx) {
         stop,
         update,
         shoot,
-        rebuildColliders,
+        setColliders,
         stats,
         setDifficulty(id) {
             difficulty = DIFFICULTIES.find((d) => d.id === id) || DIFFICULTIES[1];

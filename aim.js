@@ -4,7 +4,9 @@
 // viewmodel. Thirty seconds, one high score, kept in this browser. three.js
 // does the drawing; the pointer lock, the spawning and the scoring are all here.
 import * as THREE from './vendor/three/three.module.min.js';
-import { createBots, DIFFICULTIES, BOT_COUNTS } from './bots.js';
+import { createBots, collectColliders, DIFFICULTIES, BOT_COUNTS } from './bots.js';
+import { mergeGeometries } from './vendor/three/addons/utils/BufferGeometryUtils.js';
+import { GLTFLoader } from './vendor/three/addons/loaders/GLTFLoader.js';
 
 const ROUND_MS = 30000;
 const TARGET_COUNT = 5;
@@ -231,6 +233,7 @@ let skyMesh = null;
 // Whether the map in the scene is the bots-mode build, and its walkable edges.
 let builtWide = false;
 let mapBounds = null;
+let mapColliders = [];
 
 // A texture painted once on a canvas. Every map surface is procedural, so the
 // page ships no image assets for any of this.
@@ -356,6 +359,8 @@ function buildRange(root, opts = {}) {
     outskirts(root, {
         seed: 11,
         gallery: { x: 56, z: 50, turn: -Math.PI / 2 },
+        landmarks: ['court', 'stele'],
+        landmarkSpots: { court: { x: -50, z: -55, turn: 0 }, stele: { x: 0, z: 70, turn: Math.PI } },
         rooms: [
             { x: -56, z: 50, turn: Math.PI / 2, kind: 'cafe' },
             { x: 56, z: -50, turn: -Math.PI / 2, kind: 'otaku' },
@@ -506,6 +511,13 @@ function outskirts(root, cfg) {
     // Open corners of street cells an egg could sit in, gathered as the grid
     // is laid out and drawn from at random afterwards, so eggs spread out.
     const eggSpots = [];
+    // Landmarks claim their ground first.
+    const landmarkSpots = cfg.landmarkSpots || LANDMARK_SPOTS;
+    for (const name of cfg.landmarks || []) {
+        const at = landmarkSpots[name];
+        const [lw, ld] = LANDMARK_SIZES[name];
+        keep.push([at.x - lw / 2, at.x + lw / 2, at.z - ld / 2, at.z + ld / 2]);
+    }
     const blocked = (rect) => keep.some((k) => overlaps(rect, k));
     for (let cx = outer[0] + cell / 2; cx < outer[1]; cx += cell) {
         for (let cz = outer[2] + cell / 2; cz < outer[3]; cz += cell) {
@@ -517,14 +529,33 @@ function outskirts(root, cfg) {
                 // buildings pack in right up to the reserved areas.
                 let placed = false;
                 for (let tryNo = 0; tryNo < 4 && !placed; tryNo++) {
-                    const w = range(cfg.minSize ?? 8, cell - 6);
-                    const d = range(cfg.minSize ?? 8, cell - 6);
+                    let w = range(cfg.minSize ?? 8, cell - 6);
+                    let d = range(cfg.minSize ?? 8, cell - 6);
+                    let bh = h;
+                    // Town maps mix it up: some towers, some long blocks, the
+                    // rest ordinary, so no two streets look the same.
+                    if (cfg.variety) {
+                        const shape = rng();
+                        if (shape < 0.18) {
+                            w = range(15, 19);
+                            d = range(15, 19);
+                            bh = range(30, 34);
+                        } else if (shape < 0.42) {
+                            const long = range(26, 42);
+                            const short = range(15, 18);
+                            [w, d] = rng() < 0.5 ? [long, short] : [short, long];
+                            bh = range(12, 22);
+                        }
+                    }
                     const x = cx + range(-1, 1) * Math.max(0, cell - w - 6) / 2;
                     const z = cz + range(-1, 1) * Math.max(0, cell - d - 6) / 2;
-                    if (blocked([x - w / 2 - 3.5, x + w / 2 + 3.5, z - d / 2 - 3.5, z + d / 2 + 3.5])) continue;
-                    cfg.building(x, z, w, d, h, rng);
+                    const foot = [x - w / 2 - 3.5, x + w / 2 + 3.5, z - d / 2 - 3.5, z + d / 2 + 3.5];
+                    if (blocked(foot)) continue;
+                    cfg.building(x, z, w, d, bh, rng);
                     // Some flat roofs get stairs up the side, to fight from.
-                    if (cfg.stairs && h <= 12.5 && rng() < 0.35) roofStairs(root, cfg.stairs, x, z, w, d, h);
+                    if (cfg.stairs && bh <= 12.5 && rng() < 0.35) roofStairs(root, cfg.stairs, x, z, w, d, bh);
+                    // Later buildings (bigger than their cells now) keep off it.
+                    keep.push(foot);
                     placed = true;
                 }
                 if (placed) continue;
@@ -541,8 +572,10 @@ function outskirts(root, cfg) {
         }
     }
     // Two eggs are saved for the gallery roof; the rest go out in the streets.
+    const hasCourt = (cfg.landmarks || []).includes('court');
+    const onCourt = hasCourt ? eggQueue.filter((e) => e.court) : [];
     const onRoof = spot ? eggQueue.filter((e) => e.roof) : [];
-    const inStreets = eggQueue.filter((e) => !onRoof.includes(e));
+    const inStreets = eggQueue.filter((e) => !onRoof.includes(e) && !onCourt.includes(e));
     eggQueue.length = 0;
     for (const egg of inStreets) {
         if (!eggSpots.length) {
@@ -553,6 +586,19 @@ function outskirts(root, cfg) {
         placeEgg(root, egg, ex, ez);
     }
     eggQueue.push(...onRoof);
+
+    // The landmarks themselves.
+    for (const name of cfg.landmarks || []) {
+        const at = landmarkSpots[name];
+        if (name === 'tower') tower(root, at, cfg.towerStyle || { face: facadeTexture(speckle('#b9b4a8', ['#9e9990', '#cfcac0'], 1200), 'plain'), roof: plain(0x8c8478) }, rng);
+        if (name === 'hangar') hangar(root, at, rng);
+        if (name === 'court') {
+            court(root, at);
+            for (const egg of onCourt) placeEgg(root, egg, at.x + 3, at.z + 1);
+        }
+        if (name === 'stele') stele(root, at);
+        if (name === 'lalibela') lalibela(root, at);
+    }
 
     const roomWall = cfg.galleryWall || cfg.wall;
     for (const r of rooms) (r.kind === 'cafe' ? animeCafe : otakuDen)(root, r, roomWall, rng);
@@ -793,11 +839,11 @@ function gallery(root, { x, z, turn }, wallMaterial) {
     const lamp = new THREE.PointLight(0xffe2b8, 60, 34);
     lamp.position.set(0, H - 2, 0);
     g.add(lamp);
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(W - 1, D - 1), surface(paint(128, planks('#7a5332', '#4a3220')), 6, 4));
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(W - 1, D - 1), surface(shared('floor', () => paint(128, planks('#7a5332', '#4a3220'))), 6, 4));
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = FLOOR_Y + 0.03;
     g.add(floor);
-    const rug = new THREE.Mesh(new THREE.PlaneGeometry(8, 5), new THREE.MeshStandardMaterial({ map: paint(128, carpet), roughness: 1 }));
+    const rug = new THREE.Mesh(new THREE.PlaneGeometry(8, 5), new THREE.MeshStandardMaterial({ map: shared('carpet', () => paint(128, carpet)), roughness: 1 }));
     rug.rotation.x = -Math.PI / 2;
     rug.position.set(0, FLOOR_Y + 0.05, 1);
     g.add(rug);
@@ -850,7 +896,7 @@ const EGG_BUILDERS = {
     // Ambo, the Ethiopian sparkling water, in its green bottle.
     ambo() {
         const g = new THREE.Group();
-        block(g, surface(paint(128, crateTexture)), [1.6, 1.6, 1.6], [0, 0, 0]);
+        block(g, surface(shared('crate', () => paint(128, crateTexture))), [1.6, 1.6, 1.6], [0, 0, 0]);
         const glass = new THREE.MeshStandardMaterial({ color: 0x2f8f3a, roughness: 0.12, metalness: 0.1, transparent: true, opacity: 0.85 });
         const body = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 1.4, 20), glass);
         body.position.y = FLOOR_Y + 1.6 + 0.7;
@@ -877,7 +923,7 @@ const EGG_BUILDERS = {
     // The "artificially intelligent" cap, left on a crate.
     hat() {
         const g = new THREE.Group();
-        block(g, surface(paint(128, crateTexture)), [2, 2, 2], [0, 0, 0]);
+        block(g, surface(shared('crate', () => paint(128, crateTexture))), [2, 2, 2], [0, 0, 0]);
         const denim = plain(0x46546a);
         const crown = new THREE.Mesh(new THREE.SphereGeometry(0.7, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), denim);
         crown.position.y = FLOOR_Y + 2;
@@ -966,7 +1012,7 @@ const EGG_BUILDERS = {
     // The camera from AfroTech.
     camera() {
         const g = new THREE.Group();
-        block(g, surface(paint(128, crateTexture)), [1.8, 1.8, 1.8], [0, 0, 0]);
+        block(g, surface(shared('crate', () => paint(128, crateTexture))), [1.8, 1.8, 1.8], [0, 0, 0]);
         const black = plain(0x1a1a1a, { roughness: 0.6 });
         const body = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.8, 0.5), black);
         body.position.y = FLOOR_Y + 2.2;
@@ -1003,6 +1049,139 @@ function placeEgg(root, egg, x, z) {
     root.add(g);
     eggMeshes.push(g);
     return g;
+}
+
+/* ----- drawing the maps fast -----
+
+   A built map is thousands of little meshes: every brick wall, stair, chair
+   and poster its own draw call. After a map is built (and its collision boxes
+   read off), everything that never moves is merged: meshes are grouped by
+   material and by which 48-unit patch of ground they stand in, and each group
+   becomes one mesh. A few hundred draw calls a frame becomes a few dozen, and
+   because each merged mesh covers one patch, anything behind the camera or out
+   past the fog is skipped whole. */
+
+const CHUNK = 48;
+let chunkMeshes = [];
+
+// Textures that repeat all over a map (crates, rugs, floors, posters, house
+// fronts) are painted once per map and shared, since only meshes that share a
+// texture can be merged into one draw call.
+const sharedTextures = new Map();
+function shared(key, make) {
+    if (!sharedTextures.has(key)) sharedTextures.set(key, make());
+    return sharedTextures.get(key);
+}
+
+// Two materials that would draw the same get the same key, so their meshes
+// can share one draw call. Texture repeats are baked into the geometry's UVs
+// below, so walls cut from the same texture at different sizes still match.
+function materialKey(m) {
+    return [
+        m.type, m.color?.getHex(), m.map?.source?.uuid, m.roughness, m.metalness,
+        m.transparent, m.opacity, m.side, m.emissive?.getHex(), m.emissiveIntensity,
+        m.flatShading, m.depthWrite, m.polygonOffset, m.vertexColors, m.wireframe,
+    ].join('|');
+}
+
+const canonical = new Map();
+function canonicalMaterial(key, m) {
+    if (canonical.has(key)) return canonical.get(key);
+    const c = m.clone();
+    if (m.map) {
+        c.map = m.map.clone();
+        c.map.repeat.set(1, 1);
+        c.map.offset.set(0, 0);
+        c.map.needsUpdate = true;
+    }
+    canonical.set(key, c);
+    return c;
+}
+
+// One geometry per material group, in world space, with only the attributes
+// every merged mesh can share.
+function worldPieces(mesh) {
+    const source = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+    source.applyMatrix4(mesh.matrixWorld);
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const groups = Array.isArray(mesh.material) && source.groups.length
+        ? source.groups
+        : [{ start: 0, count: source.attributes.position.count, materialIndex: 0 }];
+    const pieces = [];
+    for (const group of groups) {
+        const m = materials[group.materialIndex];
+        if (!m) continue;
+        const g = new THREE.BufferGeometry();
+        for (const name of ['position', 'normal', 'uv']) {
+            const attr = source.attributes[name];
+            const size = name === 'uv' ? 2 : 3;
+            const array = new Float32Array(group.count * size);
+            if (attr) {
+                for (let i = 0; i < group.count; i++) {
+                    for (let k = 0; k < size; k++) array[i * size + k] = attr.getComponent(group.start + i, k);
+                }
+            }
+            g.setAttribute(name, new THREE.BufferAttribute(array, size));
+        }
+        if (m.map) {
+            const uv = g.attributes.uv;
+            const { repeat, offset } = m.map;
+            for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * repeat.x + offset.x, uv.getY(i) * repeat.y + offset.y);
+        }
+        pieces.push({ g, m });
+    }
+    source.dispose();
+    return pieces;
+}
+
+function isStatic(o) {
+    for (let up = o; up; up = up.parent) {
+        if (up.userData.egg || up.userData.dynamic) return false;
+    }
+    const materials = Array.isArray(o.material) ? o.material : [o.material];
+    return materials.every((m) => m && (m.isMeshStandardMaterial || m.isMeshBasicMaterial || m.isMeshToonMaterial));
+}
+
+function batchStatic(root) {
+    chunkMeshes = [];
+    root.updateMatrixWorld(true);
+    const buckets = new Map();
+    const merged = [];
+    const box = new THREE.Box3();
+    const centre = new THREE.Vector3();
+    root.traverse((o) => {
+        if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || !isStatic(o)) return;
+        box.setFromObject(o);
+        box.getCenter(centre);
+        const chunk = `${Math.floor(centre.x / CHUNK)},${Math.floor(centre.z / CHUNK)}`;
+        for (const { g, m } of worldPieces(o)) {
+            const key = materialKey(m);
+            const bucketKey = `${key}#${chunk}`;
+            if (!buckets.has(bucketKey)) buckets.set(bucketKey, { material: canonicalMaterial(key, m), list: [] });
+            buckets.get(bucketKey).list.push(g);
+        }
+        merged.push(o);
+    });
+    for (const o of merged) o.parent.remove(o);
+    for (const { material, list } of buckets.values()) {
+        const g = list.length === 1 ? list[0] : mergeGeometries(list, false);
+        for (const piece of list) if (piece !== g) piece.dispose();
+        if (!g) continue;
+        g.computeBoundingSphere();
+        const m = new THREE.Mesh(g, material);
+        m.matrixAutoUpdate = false;
+        root.add(m);
+        chunkMeshes.push(m);
+    }
+}
+
+// Merged patches past the fog (plus their own size) are not drawn at all.
+function cullChunks() {
+    const far = (scene.fog ? scene.fog.far : 260) + 20;
+    for (const m of chunkMeshes) {
+        const s = m.geometry.boundingSphere;
+        m.visible = s.center.distanceTo(camera.position) - s.radius < far;
+    }
 }
 
 /* ----- personality: real buildings, furniture, and anime -----
@@ -1336,7 +1515,7 @@ function animePoster(rng) {
 
 // A poster flat against a surface facing `turn`, at world x, y, z.
 function poster(parent, rng, x, y, z, turn, w = 2.4) {
-    const p = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 1.4), new THREE.MeshStandardMaterial({ map: animePoster(rng), roughness: 0.7 }));
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 1.4), new THREE.MeshStandardMaterial({ map: shared(`poster${Math.floor(rng() * 8)}`, () => animePoster(rng)), roughness: 0.7 }));
     p.position.set(x, FLOOR_Y + y, z);
     p.rotation.y = turn;
     parent.add(deco(p));
@@ -1351,7 +1530,7 @@ function vendingMachine(parent, x, z, turn, rng) {
     g.rotation.y = turn;
     const colors = [0xd6362b, 0x2f6fd6, 0xf2efe6];
     block(g, plain(colors[Math.floor(rng() * colors.length)], { roughness: 0.4 }), [2.6, 5.2, 1.6], [0, 0, 0]);
-    const front = paint(128, (ctx, size) => {
+    const front = shared('vending', () => paint(128, (ctx, size) => {
         ctx.fillStyle = '#e9f4ff';
         ctx.fillRect(0, 0, size, size);
         const cans = ['#e0302b', '#2f9e44', '#f2b705', '#1f5fbf', '#ff7eb3', '#8c5a2b'];
@@ -1364,13 +1543,10 @@ function vendingMachine(parent, x, z, turn, rng) {
         ctx.fillStyle = '#1b1a18';
         ctx.font = 'bold 18px "Hiragino Sans", sans-serif';
         ctx.fillText('ドリンク', 18, 118);
-    });
+    }));
     const panel = new THREE.Mesh(new THREE.PlaneGeometry(2.1, 2.6), new THREE.MeshBasicMaterial({ map: front }));
     panel.position.set(0, FLOOR_Y + 3.4, 0.82);
     g.add(deco(panel));
-    const glow = new THREE.PointLight(0xcfe8ff, 6, 8);
-    glow.position.set(0, FLOOR_Y + 3.2, 2);
-    g.add(glow);
     parent.add(g);
 }
 
@@ -1399,9 +1575,6 @@ function lanterns(parent, x, z, turn, span = 10) {
         l.position.set(lx, FLOOR_Y + 7.2 - Math.sin((i / 6) * Math.PI) * 0.6, 0);
         g.add(deco(l));
     }
-    const glow = new THREE.PointLight(0xff8a5c, 8, 14);
-    glow.position.set(0, FLOOR_Y + 6.5, 0);
-    g.add(glow);
     parent.add(g);
 }
 
@@ -1558,12 +1731,15 @@ function furnish(g, kind, x0, x1, z0, z1, rng, keepOut) {
     const cx = (x0 + x1) / 2;
     const cz = (z0 + z1) / 2;
     const free = (x, z, r = 2) => !keepOut || !keepOut.some(([a, b, c, d]) => x + r > a && x - r < b && z + r > c && z - r < d);
-    const rug = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(8, x1 - x0 - 4), Math.min(5, z1 - z0 - 4)), new THREE.MeshStandardMaterial({ map: paint(128, carpet), roughness: 1 }));
+    const rug = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(8, x1 - x0 - 4), Math.min(5, z1 - z0 - 4)), new THREE.MeshStandardMaterial({ map: shared('carpet', () => paint(128, carpet)), roughness: 1 }));
     rug.rotation.x = -Math.PI / 2;
     rug.position.set(cx, FLOOR_Y + 0.05, cz);
     g.add(deco(rug));
 
-    if (kind === 'home') {
+    // With the open-source furniture loaded, rooms get the real thing.
+    if (kenneyLoaded && furnishKenney(g, kind, x0, x1, z0, z1, rng, free)) return;
+
+    if (kind === 'home' || kind === 'kitchen') {
         // A couch against the back wall with a TV facing it, a table with
         // chairs, a bed in a corner, a plush and a poster.
         if (free(cx, z0 + 1.6, 4)) {
@@ -1606,7 +1782,7 @@ function furnish(g, kind, x0, x1, z0, z1, rng, keepOut) {
         poster(g, rng, cx, 5.5, z0 + 0.36, 0, 2);
     } else {
         // Storage: crates stacked two high and a few barrels.
-        const crate = surface(paint(128, crateTexture));
+        const crate = surface(shared('crate', () => paint(128, crateTexture)));
         for (let i = 0; i < 5; i++) {
             const bx = x0 + 2.5 + rng() * (x1 - x0 - 5);
             const bz = z0 + 2.5 + rng() * (z1 - z0 - 5);
@@ -1621,6 +1797,61 @@ function furnish(g, kind, x0, x1, z0, z1, rng, keepOut) {
             mesh(g, new THREE.CylinderGeometry(0.9, 0.9, 2.2, 14), plain(0x6f4a2a), [bx, 1.1, bz]);
         }
     }
+}
+
+// Rooms furnished from the Kenney kit. Things stand against walls, facing
+// into the room, and anything that would block a doorway or stairs is skipped.
+function furnishKenney(g, kind, x0, x1, z0, z1, rng, free) {
+    const cx = (x0 + x1) / 2;
+    const cz = (z0 + z1) / 2;
+    const at = (name, x, z, turn, y = 0) => (free(x, z, 2) ? kprop(g, name, x, y, z, turn) : null);
+    // How tall a placed model stands, in the room's own terms (so the TV sits
+    // on its cabinet on any floor). World matrices are refreshed first, since
+    // nothing has been drawn yet.
+    const heightOf = (obj) => {
+        if (!obj) return 0;
+        obj.updateWorldMatrix(true, true);
+        return new THREE.Box3().setFromObject(obj).max.y - FLOOR_Y - (obj.parent?.position?.y || 0);
+    };
+    if (kind === 'home') {
+        at('loungeSofa', cx, z0 + 2.4, 0);
+        at('tableCoffee', cx, z0 + 7, 0);
+        const cabinet = at('cabinetTelevision', cx, z1 - 1.6, Math.PI);
+        if (cabinet) kprop(g, 'televisionModern', cx, heightOf(cabinet), z1 - 1.8, Math.PI);
+        at('bedDouble', x1 - 5.5, z0 + 5.5, -Math.PI / 2);
+        if (rng() < 0.6) at('bear', x1 - 5.5, z0 + 3, 0, 2.6);
+        at('bookcaseOpen', x0 + 1.4, cz, Math.PI / 2);
+        at('pottedPlant', x0 + 2, z0 + 2, 0);
+        at('lampRoundFloor', x1 - 2, z1 - 2, 0);
+        poster(g, rng, cx - 5, 5.5, z0 + 0.36, 0, 2);
+        return true;
+    }
+    if (kind === 'kitchen') {
+        for (let i = 0; i < 3; i++) at('kitchenCabinet', x0 + 3 + i * 4.6, z0 + 1.6, 0);
+        const counter = at('kitchenStove', x0 + 3 + 3 * 4.6, z0 + 1.6, 0);
+        at('kitchenFridgeLarge', x1 - 2.5, z0 + 2, 0);
+        if (counter) kprop(g, 'kitchenCoffeeMachine', x0 + 3, heightOf(counter), z0 + 1.4, 0);
+        const table = at('tableRound', cx, cz + 2, 0);
+        if (table) {
+            kprop(g, 'chairCushion', cx - 3, 0, cz + 2, Math.PI / 2);
+            kprop(g, 'chairCushion', cx + 3, 0, cz + 2, -Math.PI / 2);
+        }
+        at('trashcan', x1 - 1.5, z1 - 1.5, 0);
+        at('plantSmall1', cx, cz + 2, 0, 3.9);
+        return true;
+    }
+    if (kind === 'shop') {
+        for (let i = 0; i < 3; i++) at('kitchenBar', cx - 5 + i * 5, cz - 1, 0);
+        for (const sx of [x0 + 1.2, x1 - 1.2]) {
+            for (let i = 0; i < 2; i++) at('bookcaseOpen', sx, z0 + 4 + i * 5, sx < cx ? Math.PI / 2 : -Math.PI / 2);
+        }
+        at('kitchenFridgeLarge', x1 - 2.5, z0 + 1.8, 0);
+        at('cardboardBoxClosed', x0 + 2.5, z1 - 2.5, rng());
+        at('pottedPlant', x1 - 2, z1 - 2, 0);
+        poster(g, rng, cx, 5.5, z0 + 0.36, 0, 2);
+        return true;
+    }
+    return false;
 }
 
 // A hollow building: four walls with doors, a floor, sometimes a second
@@ -1671,7 +1902,7 @@ function hollowBuilding(root, x, z, w, d, h, rng, style) {
     }
 
     // Floor inside.
-    const floorMat = style.floor || surface(paint(128, planks('#7a5332', '#4a3220')), w / 6, d / 6);
+    const floorMat = style.floor || surface(shared('floor', () => paint(128, planks('#7a5332', '#4a3220'))), w / 6, d / 6);
     const inside = new THREE.Mesh(new THREE.PlaneGeometry(w - T * 2, d - T * 2), floorMat);
     inside.rotation.x = -Math.PI / 2;
     inside.position.set(x, FLOOR_Y + 0.03, z);
@@ -1681,9 +1912,11 @@ function hollowBuilding(root, x, z, w, d, h, rng, style) {
     const ix1 = x1 - T;
     const iz0 = z0 + T;
     const iz1 = z1 - T;
-    // Tall enough that you fit on the upper floor under the roof slab.
-    const twoStorey = h >= 20 && d >= 15 && w >= 14;
-    const kinds = style.kinds || ['home', 'shop', 'storage'];
+    // Floors: each is 10 up from the last, so you fit under the next one.
+    // Three storeys need 30 of height, two need 20.
+    const roomy = w >= 14 && d >= 15;
+    const floors = style.floors ?? (roomy && h >= 30 ? 3 : roomy && h >= 20 ? 2 : 1);
+    const kinds = style.kinds || ['home', 'shop', 'storage', 'home', 'kitchen'];
     const pick = () => kinds[Math.floor(rng() * kinds.length)];
 
     // Keep the doorways and the stairs clear of furniture.
@@ -1696,31 +1929,54 @@ function hollowBuilding(root, x, z, w, d, h, rng, style) {
         if (side === '-x') keepOut.push([ix0, ix0 + 4, at - 3, at + 3]);
     }
 
-    if (twoStorey) {
-        // Stairs up the inside of the -x wall, from the front toward the
-        // back, and the upper floor with a hole over them.
-        const run = Math.min(iz1 - iz0 - 2, 14);
-        const stairX = ix0 + 1.6;
-        const g = new THREE.Group();
-        g.position.set(stairX, 0, iz1 - 0.5);
-        root.add(g);
-        steps(g, style.stairs || plain(0x7d7568), 0, 0, UPPER + SLAB, run, 3);
-        keepOut.push([ix0, ix0 + 3.4, iz1 - 0.5 - run - 1, iz1]);
-        const holeZ0 = iz1 - 0.5 - run;
-        const slabMat = plain(0x8c8478);
-        // Everything east of the stairwell...
-        flagWalkable(block(root, slabMat, [ix1 - (ix0 + 3.2), SLAB, iz1 - iz0], [(ix1 + ix0 + 3.2) / 2, UPPER, (iz0 + iz1) / 2]));
-        // ...and the strip behind it.
-        if (holeZ0 - iz0 > 0.5) flagWalkable(block(root, slabMat, [3.2, SLAB, holeZ0 - iz0], [ix0 + 1.6, UPPER, (iz0 + holeZ0) / 2]));
-        // A rail along the open side of the stairwell.
-        block(root, plain(0x2f3033, { metalness: 0.4 }), [0.15, 1.3, run], [ix0 + 3.3, UPPER + SLAB, iz1 - 0.5 - run / 2]);
+    // One flight of stairs per floor (and one more onto the roof when it can
+    // be reached), switching walls each time so they stack: up the west wall
+    // front to back, then the east wall back to front, and so on. Each floor
+    // has a hole over the flight that comes up through it.
+    const levelTop = (k) => (k === 0 ? 0 : UPPER * k + SLAB);
+    const run = Math.min(iz1 - iz0 - 2, 14);
+    const stairMat = style.stairs || plain(0x7d7568);
+    const slabMat = plain(0x8c8478);
+    const railMat = plain(0x2f3033, { metalness: 0.4 });
+    const flights = floors - 1 + (style.roofAccess && !style.gable ? 1 : 0);
+    for (let k = 1; k <= flights; k++) {
+        const west = k % 2 === 1;
+        const onRoof = k === floors;
+        const base = levelTop(k - 1);
+        const top = onRoof ? h : levelTop(k);
+        const holeA = west ? iz1 - 0.5 - run : iz0 + 0.5;
+        const holeB = west ? iz1 - 0.5 : iz0 + 0.5 + run;
+        stairRun(root, stairMat, west ? ix0 + 1.6 : ix1 - 1.6, west ? iz1 - 0.5 : iz0 + 0.5, west ? -1 : 1, base, top - base, run, 3);
+        if (k === 1) keepOut.push([ix0, ix0 + 3.4, holeA - 1, iz1]);
 
-        const upstairs = new THREE.Group();
-        upstairs.position.y = UPPER + SLAB;
-        root.add(upstairs);
-        furnish(upstairs, pick(), ix0 + 3.4, ix1, iz0, iz1, rng, []);
+        const slab = onRoof ? (style.roof || slabMat) : slabMat;
+        const y = top - SLAB;
+        const mx0 = west ? ix0 + 3.2 : ix0;
+        const mx1 = west ? ix1 : ix1 - 3.2;
+        flagWalkable(block(root, slab, [mx1 - mx0, SLAB, iz1 - iz0], [(mx0 + mx1) / 2, y, (iz0 + iz1) / 2]));
+        const sx = west ? ix0 + 1.6 : ix1 - 1.6;
+        if (holeA - iz0 > 0.3) flagWalkable(block(root, slab, [3.2, SLAB, holeA - iz0], [sx, y, (iz0 + holeA) / 2]));
+        if (iz1 - holeB > 0.3) flagWalkable(block(root, slab, [3.2, SLAB, iz1 - holeB], [sx, y, (holeB + iz1) / 2]));
+        flagWalkable(block(root, railMat, [0.15, 1.3, run], [west ? ix0 + 3.3 : ix1 - 3.3, top, (holeA + holeB) / 2]));
+
+        if (!onRoof) {
+            const upstairs = new THREE.Group();
+            upstairs.position.y = top;
+            root.add(upstairs);
+            furnish(upstairs, pick(), ix0 + 3.4, ix1 - 3.4, iz0, iz1, rng, []);
+        }
     }
     furnish(root, pick(), ix0, ix1, iz0, iz1, rng, keepOut);
+
+    // A roof you can get onto gets a parapet round it.
+    if (flights === floors) {
+        const lip = style.trim || plain(0x9a9184);
+        flagWalkable(block(root, lip, [w, 1.4, 0.4], [x, h, z0 + 0.2]));
+        flagWalkable(block(root, lip, [w, 1.4, 0.4], [x, h, z1 - 0.2]));
+        flagWalkable(block(root, lip, [0.4, 1.4, d], [x0 + 0.2, h, z]));
+        flagWalkable(block(root, lip, [0.4, 1.4, d], [x1 - 0.2, h, z]));
+        return;
+    }
 
     // The roof: walkable, with the map's trim or a tiled gable.
     if (style.gable) {
@@ -1753,7 +2009,7 @@ function roomShell(root, spot, wallMaterial, { W = 24, D = 16, H = 9, sign, ligh
     const lamp = new THREE.PointLight(light, 55, 32);
     lamp.position.set(0, FLOOR_Y + H - 2, 0);
     g.add(lamp);
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(W - 1, D - 1), surface(paint(128, planks('#7a5332', '#4a3220')), 6, 4));
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(W - 1, D - 1), surface(shared('floor', () => paint(128, planks('#7a5332', '#4a3220'))), 6, 4));
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = FLOOR_Y + 0.03;
     g.add(deco(floor));
@@ -1860,7 +2116,7 @@ function otakuDen(root, spot, wallMaterial, rng) {
         bag.position.set(bx, FLOOR_Y + 0.8, 0.5);
         g.add(bag);
     }
-    const rug = new THREE.Mesh(new THREE.PlaneGeometry(10, 6), new THREE.MeshStandardMaterial({ map: paint(128, carpet), roughness: 1 }));
+    const rug = new THREE.Mesh(new THREE.PlaneGeometry(10, 6), new THREE.MeshStandardMaterial({ map: shared('carpet', () => paint(128, carpet)), roughness: 1 }));
     rug.rotation.x = -Math.PI / 2;
     rug.position.set(0, FLOOR_Y + 0.05, -1);
     g.add(deco(rug));
@@ -1924,6 +2180,511 @@ const ROOM_SPOTS = [
     { x: -62, z: 50, turn: Math.PI / 2, kind: 'cafe' },
     { x: 62, z: -75, turn: -Math.PI / 2, kind: 'otaku' },
 ];
+
+/* ----- open-source furniture -----
+
+   Kenney's Furniture Kit (CC0, kenney.nl): real sofas, beds, kitchens and
+   shelves for the insides of buildings. Loaded once at start, cloned where
+   needed, and merged with everything else for drawing. Each model is scaled
+   to a real size (1 m is 5 units here) along whichever side matters most. */
+
+const KENNEY = {
+    loungeSofa: ['w', 10], loungeSofaCorner: ['w', 10], loungeChair: ['h', 4.6], tableCoffee: ['w', 6],
+    tableRound: ['h', 3.8], tableCross: ['h', 3.8], chairCushion: ['h', 4.6], chair: ['h', 4.6],
+    bedDouble: ['d', 10], bedSingle: ['d', 10], bookcaseOpen: ['h', 9], bookcaseClosedWide: ['h', 9],
+    desk: ['w', 7], chairDesk: ['h', 5.5], computerScreen: ['w', 2.6], laptop: ['w', 1.8],
+    televisionModern: ['w', 6], cabinetTelevision: ['w', 7], kitchenFridgeLarge: ['h', 9.5], kitchenStove: ['h', 4.6],
+    kitchenCabinet: ['h', 4.6], kitchenBar: ['h', 5.2], stoolBar: ['h', 4], pottedPlant: ['h', 5],
+    plantSmall1: ['h', 2], lampRoundFloor: ['h', 8], speaker: ['h', 5], radio: ['w', 1.6],
+    trashcan: ['h', 2.6], cardboardBoxClosed: ['w', 3], bear: ['h', 2.4], books: ['w', 1.5], kitchenCoffeeMachine: ['h', 1.8],
+};
+const kenney = {};
+let kenneyLoaded = false;
+const kenneyReady = (() => {
+    const loader = new GLTFLoader();
+    return Promise.all(Object.keys(KENNEY).map((name) => loader.loadAsync(`models/kenney/${name}.glb`)
+        .then((gltf) => {
+            const obj = gltf.scene;
+            obj.updateMatrixWorld(true);
+            kenney[name] = { obj, box: new THREE.Box3().setFromObject(obj) };
+        })
+        .catch(() => {})))
+        .then(() => {
+            kenneyLoaded = true;
+        });
+})();
+
+// A furniture model standing at x, z (on something y tall), turned to face
+// `turn`. Null if it did not load, so callers can fall back to boxes.
+const kSize = new THREE.Vector3();
+const kCentre = new THREE.Vector3();
+function kprop(parent, name, x, y, z, turn = 0) {
+    const k = kenney[name];
+    if (!k) return null;
+    const [fit, size] = KENNEY[name];
+    k.box.getSize(kSize);
+    k.box.getCenter(kCentre);
+    const s = size / (fit === 'w' ? kSize.x : fit === 'd' ? kSize.z : kSize.y);
+    const inner = k.obj.clone(true);
+    inner.scale.multiplyScalar(s);
+    inner.position.set(-kCentre.x * s, -k.box.min.y * s, -kCentre.z * s);
+    const outer = new THREE.Group();
+    outer.position.set(x, FLOOR_Y + y, z);
+    outer.rotation.y = turn;
+    outer.add(inner);
+    parent.add(outer);
+    return outer;
+}
+
+/* ----- stairs that go either way, from any height ----- */
+
+function stairRun(parent, material, x, zStart, dir, baseY, rise, run, width = 3) {
+    const n = Math.ceil(rise / 1.0);
+    const depth = run / n;
+    for (let i = 0; i < n; i++) {
+        const h = ((i + 1) * rise) / n;
+        flagWalkable(block(parent, material, [width, h, depth + 0.02], [x, baseY, zStart + dir * depth * (i + 0.5)]));
+    }
+}
+
+// The same, climbing along X.
+function stairRunX(parent, material, xStart, dir, z, baseY, rise, run, width = 3) {
+    const n = Math.ceil(rise / 1.0);
+    const depth = run / n;
+    for (let i = 0; i < n; i++) {
+        const h = ((i + 1) * rise) / n;
+        flagWalkable(block(parent, material, [depth + 0.02, h, width], [xStart + dir * depth * (i + 0.5), baseY, z]));
+    }
+}
+
+const UP_AXIS = new THREE.Vector3(0, 1, 0);
+
+/* ----- the ethiopian flag, painted ----- */
+
+function ethiopianFlag(ctx, size) {
+    const h = size * 0.5;
+    ctx.fillStyle = '#078930';
+    ctx.fillRect(0, 0, size, h / 3);
+    ctx.fillStyle = '#fcdd09';
+    ctx.fillRect(0, h / 3, size, h / 3);
+    ctx.fillStyle = '#da121a';
+    ctx.fillRect(0, (2 * h) / 3, size, h / 3);
+    ctx.fillStyle = '#0f47af';
+    ctx.beginPath();
+    ctx.arc(size / 2, h / 2, h * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#fcdd09';
+    ctx.lineWidth = size * 0.008;
+    ctx.beginPath();
+    for (let i = 0; i <= 5; i++) {
+        const a = -Math.PI / 2 + (i * 4 * Math.PI) / 5;
+        const px = size / 2 + Math.cos(a) * h * 0.2;
+        const py = h / 2 + Math.sin(a) * h * 0.2;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    for (let i = 0; i < 5; i++) {
+        const a = -Math.PI / 2 + Math.PI / 5 + (i * 2 * Math.PI) / 5;
+        ctx.beginPath();
+        ctx.moveTo(size / 2 + Math.cos(a) * h * 0.1, h / 2 + Math.sin(a) * h * 0.1);
+        ctx.lineTo(size / 2 + Math.cos(a) * h * 0.27, h / 2 + Math.sin(a) * h * 0.27);
+        ctx.stroke();
+    }
+}
+
+function flagTexture() {
+    const c = document.createElement('canvas');
+    c.width = 512;
+    c.height = 256;
+    ethiopianFlag(c.getContext('2d'), 512);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+}
+
+function flagpole(parent, x, z, height = 18) {
+    mesh(parent, new THREE.CylinderGeometry(0.15, 0.2, height, 8), plain(0xd8d4cc, { metalness: 0.4 }), [x, height / 2, z]);
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(6, 3), new THREE.MeshStandardMaterial({ map: flagTexture(), side: THREE.DoubleSide, roughness: 0.9 }));
+    flag.position.set(x + 3.1, FLOOR_Y + height - 1.8, z);
+    parent.add(deco(flag));
+}
+
+function placard(parent, lines, x, y, z, turn = 0, w = 6) {
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 0.3), new THREE.MeshBasicMaterial({ map: labelTexture(lines, { bg: '#1c1a17', fg: '#f0e9dd' }) }));
+    p.position.set(x, FLOOR_Y + y, z);
+    p.rotation.y = turn;
+    parent.add(deco(p));
+}
+
+/* ----- landmarks ----- */
+
+// Every landmark is built in its own frame, facing +Z, then turned in steps
+// of a right angle so its collision boxes stay exact.
+function frame(root, spot) {
+    const g = new THREE.Group();
+    g.position.set(spot.x, 0, spot.z);
+    g.rotation.y = spot.turn || 0;
+    root.add(g);
+    return g;
+}
+
+// The tower: three floors and a roof you can reach, stairs switching sides
+// on every flight, a helipad and an antenna on top. Apex and COD both love
+// one of these in the middle of a town.
+function tower(root, spot, style, rng) {
+    hollowBuilding(root, spot.x, spot.z, 30, 30, 32, rng, { ...style, floors: 3, roofAccess: true, parapet: true });
+    const pad = new THREE.Mesh(new THREE.CircleGeometry(7, 40), new THREE.MeshBasicMaterial({ map: paint(256, (ctx, size) => {
+        ctx.fillStyle = '#2b2d30';
+        ctx.fillRect(0, 0, size, size);
+        ctx.strokeStyle = '#f2efe6';
+        ctx.lineWidth = 10;
+        ctx.beginPath();
+        ctx.arc(size / 2, size / 2, size * 0.42, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = '#f2b705';
+        ctx.font = 'bold 150px Inter, Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('H', size / 2, size / 2 + 6);
+    }) }));
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.set(spot.x + 4, FLOOR_Y + 32.05, spot.z + 4);
+    root.add(deco(pad));
+    mesh(root, new THREE.CylinderGeometry(0.2, 0.3, 14, 6), plain(0x9ea3a6, { metalness: 0.5 }), [spot.x - 10, 39, spot.z - 10]);
+    const beacon = new THREE.Mesh(UNIT_BALL, new THREE.MeshBasicMaterial({ color: 0xff3b30 }));
+    beacon.scale.setScalar(0.5);
+    beacon.position.set(spot.x - 10, FLOOR_Y + 46.2, spot.z - 10);
+    root.add(deco(beacon));
+}
+
+// The hangar: a huge shed, doors big enough for a plane at both ends, a
+// catwalk down each long wall with stairs up, and containers to fight round.
+function hangar(root, spot, rng) {
+    const g = frame(root, spot);
+    const W = 54;
+    const D = 36;
+    const H = 22;
+    const T = 0.8;
+    const skin = paint(128, corrugated('#8a8f93', '#5f6468'));
+    const wall = (len, height) => surface(skin, len / 4, height / 8);
+    // Long walls, one with a side door.
+    block(g, wall(W, H), [W, H, T], [0, 0, -D / 2]);
+    block(g, wall(20, H), [20, H, T], [-17, 0, D / 2]);
+    block(g, wall(28, H), [28, H, T], [13, 0, D / 2]);
+    block(g, wall(6, H - 9.4), [6, H - 9.4, T], [-4, 9.4, D / 2]);
+    // End walls with the big doors.
+    for (const side of [-1, 1]) {
+        block(g, wall(11, H), [T, H, 11], [side * W / 2, 0, -D / 2 + 5.5]);
+        block(g, wall(11, H), [T, H, 11], [side * W / 2, 0, D / 2 - 5.5]);
+        block(g, wall(14, H - 16), [T, H - 16, 14], [side * W / 2, 16, 0]);
+    }
+    const stripe = surface(paint(128, hazard), 10, 1);
+    block(g, stripe, [W + 0.2, 1.2, 0.2], [0, 0, -D / 2 + T / 2 + 0.2]);
+    block(g, plain(0x6f7477), [W + 1, 0.8, D + 1], [0, H, 0]);
+    // Roof trusses.
+    const steel = plain(0x3b3f44, { metalness: 0.5 });
+    for (let x = -W / 2 + 6; x < W / 2; x += 8) deco(block(g, steel, [0.4, 0.8, D], [x, H - 3, 0]));
+    // Catwalks at 10 along both long walls, stairs up at the west end.
+    for (const side of [-1, 1]) {
+        const cz = side * (D / 2 - 2.5);
+        // Stairs from the floor at the west end up to where the catwalk starts.
+        stairRunX(g, steel, -W / 2 + 1.5, 1, cz, 0, 10.5, 11, 3.6);
+        const from = -W / 2 + 12.5;
+        const to = W / 2 - 3;
+        flagWalkable(block(g, steel, [to - from, 0.5, 4], [(from + to) / 2, 10, cz]));
+        flagWalkable(block(g, plain(0xf2b705), [to - from, 1.2, 0.15], [(from + to) / 2, 10.5, cz - side * 2]));
+    }
+    // Containers and crates on the floor.
+    const boxes = [['#c8642d', '#8f3f18'], ['#3f7a4a', '#2a5332'], ['#4f86c2', '#2f5a8c'], ['#9b2f2f', '#6b1f1f']];
+    const crate = surface(shared('crate', () => paint(128, crateTexture)));
+    for (const [cx, cz, turn, stack] of [[-8, -6, 0, true], [10, 5, Math.PI / 2, false], [2, -9, 0, false], [16, -6, 0, true]]) {
+        const c = boxes[Math.floor(rng() * boxes.length)];
+        block(g, surface(paint(128, corrugated(c[0], c[1])), 4, 1), [5, 5, 12], [cx, 0, cz], turn);
+        if (stack) block(g, surface(paint(128, corrugated(c[1], c[0])), 4, 1), [5, 5, 12], [cx, 5, cz], turn);
+    }
+    for (const [cx, cz] of [[-16, 8], [-13, 9], [22, 9], [-2, 10]]) block(g, crate, [3, 3, 3], [cx, 0, cz], rng());
+    placard(g, ['hangar 7'], 0, 18, D / 2 + T / 2 + 0.05, 0, 8);
+}
+
+// A full outdoor court: painted lines, two hoops at a real ten feet, bleachers
+// down one side, a fence round it, and a ball on the centre line.
+function court(root, spot) {
+    const g = frame(root, spot);
+    const L = 34;
+    const Wd = 19;
+    // Painted at the court's own proportions, so the lines are not stretched.
+    const courtCanvas = document.createElement('canvas');
+    courtCanvas.width = 1024;
+    courtCanvas.height = Math.round((1024 * Wd) / L);
+    ((ctx, size) => {
+        const h = size * (Wd / L);
+        ctx.fillStyle = '#2f5d8c';
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#c2632f';
+        ctx.fillRect(0, 0, size * 0.22, h);
+        ctx.fillRect(size * 0.78, 0, size * 0.22, h);
+        ctx.strokeStyle = '#f2efe6';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(4, 4, size - 8, h - 8);
+        ctx.beginPath();
+        ctx.moveTo(size / 2, 4);
+        ctx.lineTo(size / 2, h - 4);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(size / 2, h / 2, h * 0.18, 0, Math.PI * 2);
+        ctx.stroke();
+        for (const end of [0, 1]) {
+            const x = end ? size - 4 : 4;
+            const dir = end ? -1 : 1;
+            ctx.strokeRect(end ? size * 0.78 : 4, h * 0.32, size * 0.22 - 4, h * 0.36);
+            ctx.beginPath();
+            ctx.arc(x, h / 2, h * 0.48, -Math.PI / 2, Math.PI / 2, end === 1);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(x + dir * size * 0.22, h / 2, h * 0.12, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(242, 239, 230, 0.85)';
+        ctx.font = 'bold 34px Inter, Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('YA', size / 2, h / 2 + 12);
+    })(courtCanvas.getContext('2d'), 1024);
+    const paintCourt = new THREE.CanvasTexture(courtCanvas);
+    paintCourt.colorSpace = THREE.SRGBColorSpace;
+    paintCourt.anisotropy = 4;
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(L, Wd), new THREE.MeshStandardMaterial({ map: paintCourt, roughness: 0.8 }));
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = FLOOR_Y + 0.04;
+    g.add(deco(floor));
+    const apron = new THREE.Mesh(new THREE.PlaneGeometry(L + 10, Wd + 14), plain(0x3a3d40));
+    apron.rotation.x = -Math.PI / 2;
+    apron.position.set(0, FLOOR_Y + 0.02, 2);
+    g.add(deco(apron));
+
+    // The hoops: pole, arm, backboard, orange rim and a net.
+    const white = plain(0xf2efe6);
+    const orange = plain(0xe0662c, { metalness: 0.3 });
+    const net = new THREE.MeshBasicMaterial({ color: 0xf2efe6, wireframe: true });
+    for (const end of [-1, 1]) {
+        const x = end * (L / 2 + 2.2);
+        mesh(g, new THREE.CylinderGeometry(0.3, 0.35, 16, 10), plain(0x2f3033, { metalness: 0.5 }), [x, 8, 0]);
+        block(g, plain(0x2f3033), [2.2, 0.4, 0.4], [x - end * 1.1, 15.5, 0]);
+        block(g, white, [0.25, 5.4, 9], [x - end * 2.2, 13.6, 0]);
+        block(g, orange, [0.28, 2.2, 3], [x - end * 2.2, 14.7, 0]);
+        const rim = new THREE.Mesh(new THREE.TorusGeometry(1.1, 0.09, 8, 24), orange);
+        rim.rotation.x = Math.PI / 2;
+        rim.position.set(x - end * 3.5, FLOOR_Y + 15, 0);
+        g.add(deco(rim));
+        const mesh2 = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 0.7, 2.2, 12, 1, true), net);
+        mesh2.position.set(x - end * 3.5, FLOOR_Y + 13.9, 0);
+        g.add(deco(mesh2));
+    }
+
+    // Bleachers along the back: three steps of seats.
+    const seat = plain(0x9ea3a6, { metalness: 0.3 });
+    for (let tier = 0; tier < 3; tier++) block(g, seat, [26, 1.4 * (tier + 1), 2.4], [0, 0, -Wd / 2 - 3 - tier * 2.4]);
+    // A low fence round the rest.
+    const rail = plain(0x2f3033, { metalness: 0.4 });
+    for (const side of [-1, 1]) block(g, rail, [0.2, 3, Wd + 10], [side * (L / 2 + 5), 0, 1]);
+    block(g, rail, [L - 10, 3, 0.2], [0, 0, Wd / 2 + 6]);
+    placard(g, ['the court', 'ball is life'], -L / 2 - 3, 6, Wd / 2 + 6.2, 0, 5);
+    return g;
+}
+
+// The Aksum stele: a tall granite stele carved as a building of many storeys,
+// false windows and beam ends, a false door at the foot, a rounded top.
+function stele(root, spot) {
+    const g = frame(root, spot);
+    const granite = paint(256, (ctx, size) => {
+        ctx.fillStyle = '#8d8a84';
+        ctx.fillRect(0, 0, size, size);
+        speckle('rgba(0,0,0,0)', ['#6f6c66', '#a8a49c', '#5f5c57'], 1600, size)(ctx);
+        ctx.fillStyle = 'rgba(40, 38, 35, 0.55)';
+        for (let floor = 0; floor < 10; floor++) {
+            const y = size - (floor + 1) * (size / 10.5);
+            ctx.fillRect(0, y, size, 3);
+            if (floor === 0) {
+                ctx.fillRect(size * 0.35, y + 6, size * 0.3, size / 10.5 - 10);
+                continue;
+            }
+            for (let i = 0; i < 3; i++) ctx.fillRect(size * (0.18 + i * 0.25), y + 7, size * 0.13, size / 10.5 - 14);
+            for (let i = 0; i < 6; i++) {
+                ctx.beginPath();
+                ctx.arc(size * (0.1 + i * 0.16), y + 3, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+    });
+    block(g, surface(paint(128, speckle('#8d8a84', ['#6f6c66', '#a8a49c'], 800)), 3, 1), [9, 1.6, 9], [0, 0, 0]);
+    block(g, new THREE.MeshStandardMaterial({ map: granite, roughness: 0.95 }), [3.8, 26, 2.2], [0, 1.6, 0]);
+    const top = new THREE.Mesh(new THREE.CylinderGeometry(1.9, 1.9, 2.2, 20, 1, false, 0, Math.PI), plain(0x8d8a84));
+    top.rotation.set(Math.PI / 2, 0, Math.PI / 2);
+    top.position.set(0, FLOOR_Y + 27.6, 0);
+    g.add(top);
+    placard(g, ['aksum stele', 'ethiopia · ~4th century'], 0, 2.6, 4.56, 0, 4.5);
+    flagpole(g, 6, 0);
+}
+
+// Bete Giyorgis at Lalibela: a church in the shape of a cross, cut down out
+// of the rock, with nested crosses on its roof. The rock walls round it stand
+// in for the pit it was carved from.
+function lalibela(root, spot) {
+    const g = frame(root, spot);
+    const rock = paint(256, speckle('#b0714a', ['#8f5a3a', '#c98a5c', '#7a4a30'], 2400));
+    const stone = (len, h) => surface(rock, len / 6, h / 6);
+    const H = 13;
+    block(g, stone(22, H), [22, H, 8], [0, 0, 0]);
+    block(g, stone(8, H), [8, H, 22], [0, 0, 0]);
+    // The three nested crosses on the roof.
+    const relief = plain(0x9a5f3c);
+    for (let i = 0; i < 3; i++) {
+        const s = 1 - i * 0.2;
+        block(g, relief, [19 * s, 0.4, 2.6 * s], [0, H + i * 0.4, 0]);
+        block(g, relief, [2.6 * s, 0.4, 19 * s], [0, H + i * 0.4, 0]);
+    }
+    // Arched windows and a door on every arm.
+    const dark = new THREE.MeshBasicMaterial({ color: 0x241810 });
+    for (let a = 0; a < 4; a++) {
+        const turn = (a * Math.PI) / 2;
+        const out = new THREE.Vector3(0, 0, 11.05).applyAxisAngle(UP_AXIS, turn);
+        archway(g, dark, 3, 6, out.x, 0, out.z, turn);
+        for (const side of [-1, 1]) {
+            const w = new THREE.Vector3(side * 4.05, 0, 7).applyAxisAngle(UP_AXIS, turn);
+            archway(g, dark, 1.4, 2.6, w.x, 8, w.z, turn + side * (Math.PI / 2));
+        }
+    }
+    // The pit walls, with a way in.
+    const pit = (len, h) => surface(rock, len / 6, h / 6);
+    block(g, pit(40, 11), [40, 11, 2], [0, 0, -19]);
+    block(g, pit(40, 11), [2, 11, 40], [-19, 0, 0]);
+    block(g, pit(40, 11), [2, 11, 40], [19, 0, 0]);
+    block(g, pit(14, 11), [14, 11, 2], [-13, 0, 19]);
+    block(g, pit(14, 11), [14, 11, 2], [13, 0, 19]);
+    placard(g, ['bete giyorgis', 'lalibela, ethiopia · carved from one rock'], 0, 5, 20.05, 0, 7);
+}
+
+// Where the landmarks stand on a standard wide map, in the corners and at the
+// end of the long lane, clear of the gallery and the two rooms.
+const LANDMARK_SPOTS = {
+    tower: { x: -88, z: -102, turn: 0 },
+    hangar: { x: 86, z: 86, turn: 0 },
+    court: { x: -88, z: 85, turn: 0 },
+    stele: { x: 0, z: 96, turn: Math.PI },
+    lalibela: { x: 93, z: -108, turn: Math.PI },
+};
+const LANDMARK_SIZES = { tower: [32, 32], hangar: [56, 38], court: [46, 38], stele: [12, 10], lalibela: [42, 42] };
+
+/* ----- more easter eggs: basketball, coffee, rust, school ----- */
+
+Object.assign(EGG_BUILDERS, {
+    // A basketball, left on the court.
+    basketball() {
+        const g = new THREE.Group();
+        const ball = new THREE.Mesh(new THREE.SphereGeometry(1.2, 24, 16), new THREE.MeshStandardMaterial({
+            roughness: 0.8,
+            map: paint(128, (ctx, size) => {
+                ctx.fillStyle = '#d9662b';
+                ctx.fillRect(0, 0, size, size);
+                ctx.strokeStyle = '#2a1a10';
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.moveTo(size / 2, 0); ctx.lineTo(size / 2, size);
+                ctx.moveTo(0, size / 2); ctx.lineTo(size, size / 2);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.arc(0, size / 2, size * 0.35, -Math.PI / 2, Math.PI / 2);
+                ctx.arc(size, size / 2, size * 0.35, Math.PI / 2, Math.PI * 1.5);
+                ctx.stroke();
+            }),
+        }));
+        ball.position.y = FLOOR_Y + 1.2;
+        g.add(ball);
+        return g;
+    },
+    // The coffee ceremony: a jebena on a low table with little cups.
+    jebena() {
+        const g = new THREE.Group();
+        block(g, plain(0x6b4526), [3.2, 1.4, 2.4], [0, 0, 0]);
+        const grass = new THREE.Mesh(new THREE.PlaneGeometry(5, 4), plain(0x6f9a45, { side: THREE.DoubleSide }));
+        grass.rotation.x = -Math.PI / 2;
+        grass.position.y = FLOOR_Y + 0.05;
+        g.add(grass);
+        const clay = plain(0x2b2320, { roughness: 0.6 });
+        const body = new THREE.Mesh(UNIT_BALL, clay);
+        body.scale.set(0.7, 0.62, 0.7);
+        body.position.set(-0.7, FLOOR_Y + 2.05, 0);
+        const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.26, 1.1, 12), clay);
+        neck.position.set(-0.7, FLOOR_Y + 3.05, 0);
+        const spout = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.8, 8), clay);
+        spout.position.set(-0.2, FLOOR_Y + 2.3, 0);
+        spout.rotation.z = -0.9;
+        const handle = new THREE.Mesh(new THREE.TorusGeometry(0.35, 0.06, 6, 12, Math.PI), clay);
+        handle.position.set(-1.2, FLOOR_Y + 2.6, 0);
+        handle.rotation.z = Math.PI / 2;
+        g.add(body, neck, spout, handle);
+        const cup = plain(0xf2efe6);
+        for (let i = 0; i < 6; i++) {
+            const c = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.12, 0.26, 10), cup);
+            c.position.set(0.3 + (i % 3) * 0.42, FLOOR_Y + 1.53, -0.3 + Math.floor(i / 3) * 0.6);
+            g.add(c);
+        }
+        return g;
+    },
+    // Ferris, the Rust crab (public domain), for youdaheDB.
+    ferris() {
+        const g = new THREE.Group();
+        const shell = toon(0xf74c00);
+        const body = new THREE.Mesh(UNIT_BALL, shell);
+        body.scale.set(1.3, 0.55, 0.95);
+        body.position.y = FLOOR_Y + 1.1;
+        g.add(body);
+        for (const side of [-1, 1]) {
+            const claw = new THREE.Mesh(UNIT_BALL, shell);
+            claw.scale.set(0.45, 0.35, 0.35);
+            claw.position.set(side * 1.7, FLOOR_Y + 1.5, 0.6);
+            const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.8, 6), shell);
+            arm.position.set(side * 1.3, FLOOR_Y + 1.3, 0.4);
+            arm.rotation.z = side * 1.1;
+            g.add(claw, arm);
+            for (let i = 0; i < 3; i++) {
+                const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 1.1, 6), shell);
+                leg.position.set(side * 1.25, FLOOR_Y + 0.5, -0.4 + i * 0.4);
+                leg.rotation.z = side * 0.7;
+                g.add(leg);
+            }
+            const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.5, 6), shell);
+            stalk.position.set(side * 0.35, FLOOR_Y + 1.75, 0.5);
+            g.add(stalk);
+        }
+        eyes(g, FLOOR_Y + 2.05, 0.6, 0.35, 0.14);
+        return g;
+    },
+    // A graduation cap in Minnesota State Mankato's purple and gold.
+    gradcap() {
+        const g = new THREE.Group();
+        block(g, surface(shared('crate', () => paint(128, crateTexture))), [2, 2, 2], [0, 0, 0]);
+        const purple = plain(0x4b2e83);
+        const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.55, 20), purple);
+        crown.position.y = FLOOR_Y + 2.27;
+        const board = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.08, 1.8), purple);
+        board.position.y = FLOOR_Y + 2.58;
+        board.rotation.y = Math.PI / 4;
+        const button = new THREE.Mesh(UNIT_BALL, plain(0xf2b705));
+        button.scale.setScalar(0.1);
+        button.position.y = FLOOR_Y + 2.65;
+        const tassel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.12, 0.8, 8), plain(0xf2b705));
+        tassel.position.set(0.8, FLOOR_Y + 2.2, 0.1);
+        g.add(crown, board, button, tassel);
+        return g;
+    },
+});
+EGGS.push(
+    { id: 'basketball', note: 'ball is life · buckets', court: true },
+    { id: 'jebena', note: 'buna · ethiopian coffee, three rounds' },
+    { id: 'ferris', note: 'ferris · the rust crab, for youdaheDB' },
+    { id: 'gradcap', note: 'cs + stats · minnesota state mankato' },
+);
 
 /* ----- textures ----- */
 
@@ -2236,7 +2997,7 @@ function buildDust2(root, opts = {}) {
     // "Blue": the container that sits on Long.
     const container = surface(paint(128, corrugated('#4f86c2', '#2f5a8c')), 3, 1);
     block(root, container, [4, 4.2, 9], [-25, 0, -20], 0.12);
-    const crate = surface(paint(128, crateTexture));
+    const crate = surface(shared('crate', () => paint(128, crateTexture)));
     for (const [x, y, z, size, turn] of [
         [-19, 0, -27, 3, -0.1], [-22, 0, -26, 3, 0.2], [-20.5, 3, -26.5, 3, 0.35],
         [24, 0, -24, 4, 0.1], [20, 0, -28, 3, -0.3], [27, 0, 4, 3, -0.2], [26, 3, 4.5, 3, 0.25],
@@ -2256,6 +3017,9 @@ function buildDust2(root, opts = {}) {
         // Long past the arch, and a lane out of every gap in the walls.
         keepClear: [[-6, 16, -115, -36], [-100, -34, -18, 6], [34, 100, -26, -4], [-12, 12, 32, 90]],
         life: { limit: 14 },
+        variety: true,
+        landmarks: ['tower', 'hangar', 'court', 'stele'],
+        towerStyle: { face: facadeTexture(sandstone, 'plain'), roof: plain(0xc9a46a), trim: plain(0xb38e57) },
         cell: 27,
         minSize: 14,
         heights: [12, 25],
@@ -2344,7 +3108,7 @@ function buildMirage(root, opts = {}) {
     block(root, plain(0x7a5332), [4, 2.4, 9], [-29.5, 0, -10]);
 
     // Carpets hung over the palace ledge and the right-hand wall.
-    const rug = new THREE.MeshStandardMaterial({ map: paint(128, carpet), side: THREE.DoubleSide, roughness: 1 });
+    const rug = new THREE.MeshStandardMaterial({ map: shared('carpet', () => paint(128, carpet)), side: THREE.DoubleSide, roughness: 1 });
     for (const [x, y, z, turn] of [[4, 9.5, -36.8, 0], [31.9, 5, -8, -Math.PI / 2], [31.9, 5, 2, -Math.PI / 2]]) {
         const hang = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 5), rug);
         hang.position.set(x, FLOOR_Y + y, z);
@@ -2363,6 +3127,8 @@ function buildMirage(root, opts = {}) {
         seed: 3,
         gallery: GALLERY_SPOT,
         life: { lanterns: true },
+        variety: true,
+        landmarks: ['tower', 'court', 'stele', 'lalibela'],
         stairs: plain(0xc4a171),
         inner: [-42, 42, -46, 30],
         keepClear: [[-10, 10, -115, 90], [-100, 100, -6, 10]],
@@ -2518,6 +3284,8 @@ function buildInferno(root, opts = {}) {
         seed: 4,
         gallery: GALLERY_SPOT,
         life: { lanterns: true, trees: true },
+        variety: true,
+        landmarks: ['tower', 'court', 'stele'],
         inner: [-42, 42, -56, 28],
         // A banana-style lane running out the side, and the main street.
         keepClear: [[-10, 10, -115, -56], [-100, -42, 8, 24], [42, 100, -20, -6]],
@@ -2527,7 +3295,7 @@ function buildInferno(root, opts = {}) {
         building: (x, z, w, d, h, rng) => {
             const color = walls[Math.floor(rng() * walls.length)];
             if (w >= 14 && d >= 14 && rng() < 0.7) {
-                const front = facadeTexture(speckle(color, ['#b38a5a', '#f2e0c0', '#a8845a'], 900), 'green');
+                const front = shared(`front-${color}`, () => facadeTexture(speckle(color, ['#b38a5a', '#f2e0c0', '#a8845a'], 900), 'green'));
                 hollowBuilding(root, x, z, w, d, h, rng, { face: front, gable: tiles, awnings: [0x4f7a3a, 0xc2412f, 0xe8d3b0] });
                 return;
             }
@@ -2626,6 +3394,9 @@ function buildNuke(root, opts = {}) {
     outskirts(root, {
         seed: 5,
         gallery: GALLERY_SPOT,
+        variety: true,
+        landmarks: ['tower', 'hangar', 'court', 'stele'],
+        towerStyle: { face: facadeTexture(corrugated('#8a8f93', '#5f6468'), 'high'), roof: plain(0x5f6468) },
         stairs: plain(0x6f7477, { metalness: 0.4 }),
         inner: [-44, 46, -80, 30],
         keepClear: [[-8, 8, 30, 90], [-100, -44, -12, 4], [46, 100, -30, -14]],
@@ -2633,7 +3404,8 @@ function buildNuke(root, opts = {}) {
         minSize: 14,
         heights: [12, 25],
         building: (x, z, w, d, h, rng) => {
-            const front = facadeTexture(sidings[Math.floor(rng() * sidings.length)], 'high');
+            const siding = Math.floor(rng() * sidings.length);
+            const front = shared(`front-${siding}`, () => facadeTexture(sidings[siding], 'high'));
             if (w >= 14 && d >= 14 && rng() < 0.65) {
                 hollowBuilding(root, x, z, w, d, h, rng, { face: front, roof: plain(0x5f6468), kinds: ['storage', 'storage', 'shop'], stairs: plain(0x6f7477, { metalness: 0.4 }) });
                 return;
@@ -2864,6 +3636,7 @@ function buildAncient(root, opts = {}) {
         seed: 7,
         gallery: GALLERY_SPOT,
         life: { trees: true, lanterns: true },
+        landmarks: ['court', 'stele', 'lalibela'],
         inner: [-36, 36, -90, 26],
         keepClear: [[-8, 8, 26, 90], [-100, -36, -30, -16], [36, 100, -30, -16]],
         density: 0.5,
@@ -2910,12 +3683,19 @@ function selectMap(id) {
         }
     });
     envRoot.clear();
+    canonical.clear();
+    sharedTextures.clear();
     skyMesh = null;
     eggMeshes = [];
 
     builtWide = botsMode();
     const made = mapKind.build(envRoot, { wide: builtWide }) || {};
     mapBounds = made.bounds || mapKind.bounds;
+    // Collision boxes first, while every piece is still separate; then the
+    // static pieces are merged for drawing.
+    mapColliders = collectColliders(envRoot, FLOOR_Y);
+    if (bots) bots.setColliders(mapColliders);
+    batchStatic(envRoot);
     const settings = { ...(mapKind.defaults || {}), ...made };
     scene.background = settings.background !== undefined ? new THREE.Color(settings.background) : null;
     scene.fog = settings.fog ? new THREE.Fog(settings.fog[0], settings.fog[1], settings.fog[2]) : null;
@@ -5201,6 +5981,7 @@ function loop(now) {
     if (envUpdate) envUpdate(now, dt);
     if (running && botsMode()) bots.update(now, dt, { keys, yaw });
     spinEggs(now);
+    cullChunks();
     // The sky stays centred on the viewer, so walking to the edge of a big map
     // never reaches it.
     if (skyMesh) skyMesh.position.copy(camera.position);
@@ -5782,6 +6563,13 @@ bots = createBots({
     },
 });
 bots.setBounds(mapBounds || mapKind.bounds);
+bots.setColliders(mapColliders);
+// The furniture models arrive a moment after the page; if the bots map was
+// already built with stand-ins, build it again with the real thing, unless
+// a round is on.
+kenneyReady.then(() => {
+    if (builtWide && !running && remainingMs <= 0) selectMap(mapKind.id);
+});
 
 // Mode, difficulty and bot count. Bots mode needs a keyboard, so phones only
 // get the aim trainer.
