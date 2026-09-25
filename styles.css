@@ -5138,6 +5138,22 @@ h1.post-full-title::before {
     position: absolute;
     background: var(--ink-fg);
     opacity: 0.85;
+    /* A dark edge, so the ticks hold up against the bright maps. */
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.aim-scope {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        linear-gradient(#000, #000) center / 100% 1px no-repeat,
+        linear-gradient(#000, #000) center / 1px 100% no-repeat,
+        radial-gradient(circle at center, transparent 0 calc(min(46vw, 46vh) - 2px), #000 min(46vw, 46vh));
+}
+
+.aim-scope[hidden] {
+    display: none;
 }
 
 /* Four ticks around a gap, so the centre stays readable against the target. */
@@ -5176,6 +5192,7 @@ h1.post-full-title::before {
     gap: 2.5rem;
     font-family: var(--ink-font);
     pointer-events: none;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
 }
 
 .aim-hud[hidden] {
@@ -5320,6 +5337,7 @@ h2.aim-side-title {
 }
 
 .aim-inspo figcaption {
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
     margin-top: 0.6rem;
     font-size: 13px;
     color: var(--ink-muted);
@@ -5388,7 +5406,7 @@ h2.aim-side-title {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background: linear-gradient(100deg, var(--ink-bg) 0%, rgba(18, 19, 18, 0.93) 24%, rgba(18, 19, 18, 0.2) 40%, rgba(18, 19, 18, 0.05) 60%, rgba(18, 19, 18, 0.4) 100%);
+    background: linear-gradient(100deg, var(--ink-bg) 0%, rgba(18, 19, 18, 0.93) 28%, rgba(18, 19, 18, 0.72) 42%, rgba(18, 19, 18, 0.08) 54%, rgba(18, 19, 18, 0.05) 62%, rgba(18, 19, 18, 0.6) 80%, rgba(18, 19, 18, 0.78) 100%);
     transition: opacity 0.35s ease;
 }
 

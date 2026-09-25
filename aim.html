@@ -16,6 +16,9 @@
              over whatever the targets happen to be doing behind it. -->
         <div class="aim-scrim" id="aimScrim" aria-hidden="true"></div>
 
+        <!-- The AWP's scope: a black mask with a round window and a reticle. -->
+        <div class="aim-scope" id="aimScope" aria-hidden="true" hidden></div>
+
         <div class="aim-crosshair" id="aimCrosshair" aria-hidden="true" hidden>
             <span></span><span></span><span></span><span></span>
         </div>
@@ -50,6 +53,10 @@
                     <div class="aim-pick">
                         <span class="aim-pick-label" id="aimTargetLabel">target</span>
                         <div class="aim-chips" id="aimTargets" role="radiogroup" aria-labelledby="aimTargetLabel"></div>
+                    </div>
+                    <div class="aim-pick">
+                        <span class="aim-pick-label" id="aimMapLabel">map</span>
+                        <div class="aim-chips" id="aimMaps" role="radiogroup" aria-labelledby="aimMapLabel"></div>
                     </div>
                 </div>
 

@@ -11,6 +11,7 @@ const STORAGE_KEY = 'aim.best';
 const NAME_KEY = 'aim.name';
 const GUN_KEY = 'aim.gun';
 const TARGET_KEY = 'aim.target';
+const MAP_KEY = 'aim.map';
 
 // The arena is a box the player stands in the middle of. Targets spawn on a
 // shell in front of them, never behind, so a round is never spent spinning.
@@ -58,6 +59,8 @@ const elBoard = document.getElementById('aimBoard');
 const elBoardEmpty = document.getElementById('aimBoardEmpty');
 const elGuns = document.getElementById('aimGuns');
 const elTargets = document.getElementById('aimTargets');
+const elMaps = document.getElementById('aimMaps');
+const elScope = document.getElementById('aimScope');
 
 // Touch devices have no pointer to lock, so they aim by tapping the target
 // directly and the copy changes to match.
@@ -132,23 +135,15 @@ function buildScene() {
     renderer.autoClear = false;
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x121312);
-    scene.fog = new THREE.Fog(0x121312, 18, 46);
 
-    camera = new THREE.PerspectiveCamera(68, 1, 0.1, 120);
+    camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.1, 240);
     camera.position.set(0, 0, 0);
 
-    // Flat, low light: the room should read as a dark space with edges, not a
-    // lit set. The targets carry all the contrast.
-    scene.add(new THREE.AmbientLight(0xf0e9dd, 1.35));
-    const key = new THREE.DirectionalLight(0xf0e9dd, 1.1);
-    key.position.set(4, 8, 6);
-    scene.add(key);
-    const rim = new THREE.PointLight(0xf0e9dd, 10, 34);
-    rim.position.set(0, -3, -8);
-    scene.add(rim);
-
-    buildRoom();
+    // Everything that is not a target (sky, ground, props, lights) belongs to
+    // the map and lives under one group, so switching maps is one swap.
+    envRoot = new THREE.Group();
+    scene.add(envRoot);
+    selectMap(mapKind.id);
 
     targetGroup = new THREE.Group();
     scene.add(targetGroup);
@@ -157,27 +152,508 @@ function buildScene() {
     buildBursts();
 }
 
-function buildRoom() {
-    // Wireframe box plus a floor grid: enough geometry to see yourself turning
-    // without anything to look at that is not a target.
+/* ---------- maps ---------- */
+
+const BASE_FOV = 68;
+const FLOOR_Y = -ROOM.h / 2;
+let envRoot;
+let envUpdate = null;
+
+// A texture painted once on a canvas. Every map surface is procedural, so the
+// page ships no image assets for any of this.
+function paint(size, draw, repeat = 1) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    draw(c.getContext('2d'), size);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(repeat, repeat);
+    tex.anisotropy = 4;
+    return tex;
+}
+
+// Scattered specks over a flat colour: sand, snow, concrete.
+function speckle(base, specks, count, size = 256) {
+    return (ctx) => {
+        ctx.fillStyle = base;
+        ctx.fillRect(0, 0, size, size);
+        for (let i = 0; i < count; i++) {
+            ctx.fillStyle = specks[i % specks.length];
+            ctx.globalAlpha = 0.25 + Math.random() * 0.5;
+            const r = 0.6 + Math.random() * 1.8;
+            ctx.fillRect(Math.random() * size, Math.random() * size, r, r);
+        }
+        ctx.globalAlpha = 1;
+    };
+}
+
+// A gradient sky on the inside of a sphere. The horizon colour matches the fog,
+// so the ground fades into the sky with no visible edge.
+function skyDome(root, top, horizon, bottom, exponent = 0.6) {
+    const material = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        uniforms: {
+            top: { value: new THREE.Color(top) },
+            horizon: { value: new THREE.Color(horizon) },
+            bottom: { value: new THREE.Color(bottom) },
+            exponent: { value: exponent },
+        },
+        vertexShader: `
+            varying vec3 vDir;
+            void main() {
+                vDir = normalize(position);
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }`,
+        fragmentShader: `
+            uniform vec3 top;
+            uniform vec3 horizon;
+            uniform vec3 bottom;
+            uniform float exponent;
+            varying vec3 vDir;
+            void main() {
+                float h = vDir.y;
+                vec3 c = h > 0.0 ? mix(horizon, top, pow(h, exponent)) : mix(horizon, bottom, pow(-h, 0.5));
+                gl_FragColor = vec4(c, 1.0);
+                #include <colorspace_fragment>
+            }`,
+    });
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(200, 32, 16), material);
+    dome.renderOrder = -1;
+    root.add(dome);
+}
+
+function ground(root, material, size = 480) {
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(size, size), material);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = FLOOR_Y;
+    root.add(floor);
+    return floor;
+}
+
+function light(root, type, color, intensity, position) {
+    const l = type === 'dir' ? new THREE.DirectionalLight(color, intensity)
+        : type === 'point' ? new THREE.PointLight(color, intensity, 40)
+        : new THREE.AmbientLight(color, intensity);
+    if (position) l.position.set(position[0], position[1], position[2]);
+    root.add(l);
+    return l;
+}
+
+// The original: a dark wireframe room. Flat, low light, so the targets carry
+// all the contrast.
+function buildRange(root) {
+    light(root, 'ambient', 0xf0e9dd, 1.35);
+    light(root, 'dir', 0xf0e9dd, 1.1, [4, 8, 6]);
+    light(root, 'point', 0xf0e9dd, 10, [0, -3, -8]);
+
     const box = new THREE.BoxGeometry(ROOM.w, ROOM.h, ROOM.d);
-    const edges = new THREE.LineSegments(
+    root.add(new THREE.LineSegments(
         new THREE.EdgesGeometry(box),
         new THREE.LineBasicMaterial({ color: INK, transparent: true, opacity: 0.18 })
-    );
-    scene.add(edges);
-
-    const shell = new THREE.Mesh(
-        box,
-        new THREE.MeshBasicMaterial({ color: 0x191a19, side: THREE.BackSide })
-    );
-    scene.add(shell);
+    ));
+    root.add(new THREE.Mesh(box, new THREE.MeshBasicMaterial({ color: 0x191a19, side: THREE.BackSide })));
 
     const grid = new THREE.GridHelper(ROOM.w, 38, 0xa67d43, INK);
-    grid.position.y = -ROOM.h / 2 + 0.01;
+    grid.position.y = FLOOR_Y + 0.01;
     grid.material.transparent = true;
     grid.material.opacity = 0.12;
-    scene.add(grid);
+    root.add(grid);
+}
+
+// Sandstone blocks with mortar lines, for the desert walls.
+function sandstone(ctx, size) {
+    ctx.fillStyle = '#d2ae74';
+    ctx.fillRect(0, 0, size, size);
+    const rows = 8;
+    const h = size / rows;
+    for (let r = 0; r < rows; r++) {
+        const offset = (r % 2) * (size / 8);
+        for (let x = -offset; x < size; x += size / 4) {
+            const shade = 190 + Math.floor(Math.random() * 30);
+            ctx.fillStyle = `rgb(${shade + 20}, ${shade - 12}, ${shade - 70})`;
+            ctx.fillRect(x + 2, r * h + 2, size / 4 - 4, h - 4);
+        }
+    }
+    speckle('rgba(0,0,0,0)', ['#8e6d3e', '#f3dcae'], 1400, size)(ctx);
+}
+
+function crateTexture(ctx, size) {
+    ctx.fillStyle = '#9b6b3a';
+    ctx.fillRect(0, 0, size, size);
+    for (let i = 0; i < 6; i++) {
+        ctx.fillStyle = i % 2 ? '#8a5d31' : '#a8773f';
+        ctx.fillRect(0, (i * size) / 6, size, size / 6 - 3);
+    }
+    ctx.strokeStyle = '#5e3d1d';
+    ctx.lineWidth = size / 14;
+    ctx.strokeRect(size / 28, size / 28, size - size / 14, size - size / 14);
+    ctx.beginPath();
+    ctx.moveTo(size / 14, size / 14);
+    ctx.lineTo(size - size / 14, size - size / 14);
+    ctx.stroke();
+}
+
+// A sunny desert courtyard in the spirit of dust2: sandstone walls, an arch
+// through to the sky, crates stacked in the corners.
+function buildDust(root) {
+    skyDome(root, 0x4f8cc9, 0xf1d9a6, 0xd9b77e, 0.55);
+    root.add(new THREE.HemisphereLight(0xcfe3f5, 0xb48a52, 1.5));
+    light(root, 'dir', 0xfff0d6, 2.6, [-20, 30, 10]);
+    light(root, 'ambient', 0xffffff, 0.25);
+
+    ground(root, new THREE.MeshStandardMaterial({
+        map: paint(256, speckle('#e0bf85', ['#b8945c', '#f5dfb5', '#a8834d'], 2600), 40),
+        roughness: 1,
+    }));
+
+    const wall = new THREE.MeshStandardMaterial({ map: paint(256, sandstone, 1), roughness: 0.95 });
+    wall.map.repeat.set(6, 2);
+    const addWall = (w, h, d, x, y, z) => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wall);
+        mesh.position.set(x, FLOOR_Y + y, z);
+        root.add(mesh);
+    };
+    // Back wall with an arch cut through it, off to one side.
+    addWall(40, 16, 2, -14, 8, -36);
+    addWall(24, 16, 2, 22, 8, -36);
+    addWall(10, 5, 2, 5, 13.5, -36);
+    addWall(2, 16, 72, -34, 8, -2);
+    addWall(2, 16, 72, 34, 8, -2);
+    addWall(70, 16, 2, 0, 8, 32);
+    // A darker lintel strip along the tops, so the walls read as built.
+    const trim = new THREE.MeshStandardMaterial({ color: 0xb38e57, roughness: 0.9 });
+    for (const [w, x, z, d] of [[70, 0, -35, 3], [3, -33, -2, 72], [3, 33, -2, 72]]) {
+        const cap = new THREE.Mesh(new THREE.BoxGeometry(w, 1, d), trim);
+        cap.position.set(x, FLOOR_Y + 16.5, z);
+        root.add(cap);
+    }
+
+    const crate = new THREE.MeshStandardMaterial({ map: paint(128, crateTexture), roughness: 0.85 });
+    const crates = [
+        [-22, 1.5, -26, 3, 0.2], [-19, 1.5, -27, 3, -0.1], [-20.5, 4.5, -26.5, 3, 0.35],
+        [24, 2, -24, 4, 0.1], [20, 1.5, -28, 3, -0.3], [-27, 1.5, 6, 3, 0.4], [27, 1.5, 4, 3, -0.2],
+    ];
+    for (const [x, y, z, size, turn] of crates) {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(size, size, size), crate);
+        mesh.position.set(x, FLOOR_Y + y, z);
+        mesh.rotation.y = turn;
+        root.add(mesh);
+    }
+
+    return { fog: [0xf1d9a6, 45, 140], halo: 0x3a2a18 };
+}
+
+// The sun for the neon map: a gradient disc with the bottom half cut into
+// bands, the synthwave staple.
+function neonSun(ctx, size) {
+    const g = ctx.createLinearGradient(0, 0, 0, size);
+    g.addColorStop(0, '#ffe066');
+    g.addColorStop(0.55, '#ff7a59');
+    g.addColorStop(1, '#ff2e88');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'destination-out';
+    for (let i = 0; i < 7; i++) {
+        const y = size * (0.55 + i * 0.065);
+        ctx.fillRect(0, y, size, 2 + i * 1.6);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+}
+
+function ridge(root, z, height, fill, line, seed) {
+    const shape = new THREE.Shape();
+    const points = [];
+    for (let i = 0; i <= 40; i++) {
+        const x = -220 + i * 11;
+        const y = Math.abs(Math.sin(i * 0.9 + seed) * 0.6 + Math.sin(i * 0.37 + seed * 2) * 0.4) * height;
+        points.push(new THREE.Vector3(x, y, 0));
+    }
+    shape.moveTo(-220, 0);
+    for (const p of points) shape.lineTo(p.x, p.y);
+    shape.lineTo(220, 0);
+    const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({ color: fill, fog: false }));
+    mesh.position.set(0, FLOOR_Y, z);
+    root.add(mesh);
+    const edge = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color: line, fog: false }));
+    edge.position.set(0, FLOOR_Y, z + 0.1);
+    root.add(edge);
+}
+
+// Synthwave: a glowing grid running out to a banded sun behind two ranges of
+// mountains. The grid scrolls towards you, slowly.
+function buildNeon(root) {
+    skyDome(root, 0x05030f, 0x3b0f5c, 0x0a0416, 0.45);
+    // Tinted, but not so far that a white chicken turns purple.
+    light(root, 'ambient', 0xd8ccff, 1.25);
+    light(root, 'dir', 0xffb3e6, 1.3, [0, 10, 10]);
+    light(root, 'point', 0x28c7fa, 14, [0, -2, 4]);
+
+    const sun = new THREE.Mesh(
+        new THREE.PlaneGeometry(70, 70),
+        new THREE.MeshBasicMaterial({ map: paint(512, neonSun), transparent: true, fog: false, depthWrite: false })
+    );
+    sun.position.set(0, 12, -180);
+    root.add(sun);
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: GLOW, color: 0xff4f9a, transparent: true, opacity: 0.55,
+        blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    }));
+    halo.scale.setScalar(150);
+    halo.position.set(0, 10, -185);
+    root.add(halo);
+
+    ridge(root, -150, 34, 0x1a0630, 0xb14dff, 1.3);
+    ridge(root, -120, 20, 0x0d0418, 0x28c7fa, 4.1);
+
+    ground(root, new THREE.MeshBasicMaterial({ color: 0x07030f }));
+    const grid = new THREE.GridHelper(480, 120, 0xff2e88, 0xff2e88);
+    grid.position.y = FLOOR_Y + 0.02;
+    grid.material.transparent = true;
+    grid.material.opacity = 0.75;
+    root.add(grid);
+
+    const cell = 480 / 120;
+    return {
+        fog: [0x2a0b45, 25, 150],
+        halo: 0xff7ad9,
+        update(now) {
+            grid.position.z = ((now / 1000) * 2.2) % cell;
+        },
+    };
+}
+
+// A cold white field: ice pillars, a mountain range in the haze, and snow
+// drifting down through the arena.
+function buildArctic(root) {
+    skyDome(root, 0x7fb0dc, 0xe6eff6, 0xf4f8fb, 0.5);
+    root.add(new THREE.HemisphereLight(0xdfeefa, 0xa9c3d6, 1.7));
+    light(root, 'dir', 0xffffff, 1.7, [30, 14, -20]);
+
+    ground(root, new THREE.MeshStandardMaterial({
+        map: paint(256, speckle('#f4f8fb', ['#d6e4ef', '#ffffff', '#c9dbe8'], 1800), 30),
+        roughness: 0.95,
+    }));
+
+    const drift = new THREE.MeshStandardMaterial({ color: 0xf7fafc, roughness: 1 });
+    for (const [x, z, w, d] of [[-20, -28, 9, 5], [18, -32, 12, 6], [-32, 8, 8, 10], [30, 0, 10, 7], [4, -44, 16, 6]]) {
+        const mound = new THREE.Mesh(UNIT_BALL, drift);
+        mound.scale.set(w, 1.6, d);
+        mound.position.set(x, FLOOR_Y, z);
+        root.add(mound);
+    }
+
+    const ice = new THREE.MeshStandardMaterial({
+        color: 0xa9dcef, roughness: 0.12, metalness: 0.05,
+        transparent: true, opacity: 0.86, emissive: 0x0b3140, emissiveIntensity: 0.4,
+    });
+    const pillar = new THREE.CylinderGeometry(1, 1.2, 1, 6);
+    for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * Math.PI * 2 + 0.3;
+        const r = 26 + (i % 3) * 7;
+        const h = 7 + ((i * 37) % 13);
+        const mesh = new THREE.Mesh(pillar, ice);
+        mesh.scale.set(1.2 + (i % 2), h, 1.2 + (i % 2));
+        mesh.position.set(Math.sin(a) * r, FLOOR_Y + h / 2, -Math.cos(a) * r);
+        mesh.rotation.set((i % 3 - 1) * 0.08, i, (i % 2 - 0.5) * 0.12);
+        root.add(mesh);
+    }
+
+    const peak = new THREE.MeshStandardMaterial({ color: 0xdfe9f2, roughness: 1, flatShading: true });
+    for (const [x, z, r, h] of [[-70, -130, 40, 50], [-10, -150, 50, 70], [60, -135, 42, 55], [120, -110, 36, 40], [-130, -100, 36, 44]]) {
+        const mountain = new THREE.Mesh(new THREE.ConeGeometry(r, h, 7), peak);
+        mountain.position.set(x, FLOOR_Y + h / 2, z);
+        root.add(mountain);
+    }
+
+    // Snow: points in a box round the player, falling and drifting sideways,
+    // wrapped back to the top when they reach the ground.
+    const COUNT = 1400;
+    const positions = new Float32Array(COUNT * 3);
+    for (let i = 0; i < COUNT; i++) {
+        positions[i * 3] = (Math.random() - 0.5) * 70;
+        positions[i * 3 + 1] = FLOOR_Y + Math.random() * 30;
+        positions[i * 3 + 2] = (Math.random() - 0.5) * 70;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    // A soft round flake rather than the default square point.
+    const flake = paint(64, (ctx, size) => {
+        const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        g.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        g.addColorStop(0.5, 'rgba(255, 255, 255, 0.8)');
+        g.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+    });
+    const snow = new THREE.Points(geometry, new THREE.PointsMaterial({
+        map: flake, color: 0xffffff, size: 0.22, transparent: true, opacity: 0.95, depthWrite: false,
+    }));
+    root.add(snow);
+
+    return {
+        fog: [0xe6eff6, 35, 170],
+        halo: 0x2b3a48,
+        update(now, dt) {
+            const p = geometry.attributes.position.array;
+            for (let i = 0; i < COUNT; i++) {
+                p[i * 3 + 1] -= dt * (1.4 + (i % 5) * 0.25);
+                p[i * 3] += Math.sin(now / 1400 + i) * dt * 0.4;
+                if (p[i * 3 + 1] < FLOOR_Y) p[i * 3 + 1] += 30;
+            }
+            geometry.attributes.position.needsUpdate = true;
+        },
+    };
+}
+
+function planetBands(ctx, size) {
+    const colors = ['#c98a4b', '#e2b27a', '#a8683a', '#f0cf9a', '#b8773f', '#d99c5c', '#8f5530'];
+    let y = 0;
+    let i = 0;
+    while (y < size) {
+        const h = 6 + Math.random() * 26;
+        ctx.fillStyle = colors[i++ % colors.length];
+        ctx.fillRect(0, y, size, h);
+        y += h;
+    }
+    speckle('rgba(0,0,0,0)', ['#6e3f1f', '#ffe2b4'], 900, size)(ctx);
+}
+
+function ringBands(ctx, size) {
+    const c = size / 2;
+    for (let r = c; r > 0; r -= 2) {
+        const t = r / c;
+        const alpha = t < 0.7 ? 0 : 0.25 + Math.abs(Math.sin(r * 0.37)) * 0.55;
+        ctx.fillStyle = `rgba(230, 200, 160, ${alpha})`;
+        ctx.beginPath();
+        ctx.arc(c, c, r, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+// Open space: a starfield, a ringed planet, a faint nebula, and a lit platform
+// to stand on.
+function buildSpace(root) {
+    skyDome(root, 0x03040c, 0x0a0e26, 0x02030a, 0.8);
+    light(root, 'ambient', 0x9aa8ff, 0.7);
+    light(root, 'dir', 0xfff2dd, 2.4, [40, 20, -10]);
+    light(root, 'point', 0x5fd4ff, 12, [0, -4, -6]);
+
+    const starLayer = (count, size, radius) => {
+        const positions = new Float32Array(count * 3);
+        for (let i = 0; i < count; i++) {
+            const v = new THREE.Vector3().randomDirection().multiplyScalar(radius);
+            positions.set([v.x, v.y, v.z], i * 3);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const points = new THREE.Points(geometry, new THREE.PointsMaterial({
+            color: 0xffffff, size, sizeAttenuation: false, fog: false, transparent: true, depthWrite: false,
+        }));
+        root.add(points);
+        return points;
+    };
+    const far = starLayer(2400, 1.2, 180);
+    const near = starLayer(500, 2.2, 170);
+
+    for (const [x, y, z, color, s] of [[-60, 30, -150, 0x6b3cff, 140], [80, -10, -160, 0x1e8bff, 120], [10, 60, -170, 0xff4fa0, 90]]) {
+        const cloud = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: GLOW, color, transparent: true, opacity: 0.22,
+            blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+        }));
+        cloud.scale.setScalar(s);
+        cloud.position.set(x, y, z);
+        root.add(cloud);
+    }
+
+    const planet = new THREE.Group();
+    planet.position.set(-20, 52, -140);
+    planet.add(new THREE.Mesh(
+        new THREE.SphereGeometry(24, 48, 32),
+        new THREE.MeshStandardMaterial({ map: paint(256, planetBands), roughness: 0.9 })
+    ));
+    const rings = new THREE.Mesh(
+        new THREE.RingGeometry(30, 46, 96),
+        new THREE.MeshBasicMaterial({ map: paint(512, ringBands), transparent: true, side: THREE.DoubleSide, depthWrite: false })
+    );
+    rings.rotation.set(-1.2, 0.3, 0.2);
+    planet.add(rings);
+    root.add(planet);
+
+    const moon = new THREE.Mesh(
+        new THREE.SphereGeometry(4, 32, 16),
+        new THREE.MeshStandardMaterial({ map: paint(128, speckle('#b9bcc6', ['#8d909b', '#d9dce4'], 700)), roughness: 1 })
+    );
+    moon.position.set(48, 34, -110);
+    root.add(moon);
+
+    const deck = new THREE.Mesh(
+        new THREE.CylinderGeometry(22, 20, 1, 64),
+        new THREE.MeshStandardMaterial({ color: 0x1b1f2a, metalness: 0.6, roughness: 0.4 })
+    );
+    deck.position.y = FLOOR_Y - 0.5;
+    root.add(deck);
+    const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(22, 0.18, 8, 96),
+        new THREE.MeshBasicMaterial({ color: 0x5fd4ff })
+    );
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = FLOOR_Y;
+    root.add(rim);
+    const lines = new THREE.PolarGridHelper(21, 16, 6, 64, 0x5fd4ff, 0x2d6f8f);
+    lines.position.y = FLOOR_Y + 0.02;
+    lines.material.transparent = true;
+    lines.material.opacity = 0.35;
+    root.add(lines);
+
+    return {
+        fog: null,
+        halo: 0xf0e9dd,
+        update(now) {
+            far.rotation.y = now / 400000;
+            near.rotation.y = now / 260000;
+            near.material.opacity = 0.75 + Math.sin(now / 700) * 0.2;
+            planet.rotation.y = now / 90000;
+        },
+    };
+}
+
+const MAPS = [
+    { id: 'range', label: 'range', build: buildRange, defaults: { background: 0x121312, fog: [0x121312, 18, 46], halo: INK } },
+    { id: 'dust', label: 'dust', build: buildDust },
+    { id: 'neon', label: 'neon', build: buildNeon },
+    { id: 'arctic', label: 'arctic', build: buildArctic },
+    { id: 'space', label: 'space', build: buildSpace },
+];
+
+let mapKind = MAPS[0];
+
+// Empties the map group, freeing what the old map made, and builds the new
+// one. Fog, the halo colour round the targets and the per-frame hook all come
+// from the map.
+function selectMap(id) {
+    mapKind = MAPS.find((m) => m.id === id) || MAPS[0];
+    if (!envRoot) return;
+
+    envRoot.traverse((node) => {
+        if (node.geometry && node.geometry !== UNIT_BALL && node.geometry !== UNIT_BOX) node.geometry.dispose();
+        const materials = Array.isArray(node.material) ? node.material : node.material ? [node.material] : [];
+        for (const m of materials) {
+            if (m.map && m.map !== GLOW) m.map.dispose();
+            m.dispose();
+        }
+    });
+    envRoot.clear();
+
+    const made = mapKind.build(envRoot) || {};
+    const settings = { ...(mapKind.defaults || {}), ...made };
+    scene.background = settings.background !== undefined ? new THREE.Color(settings.background) : null;
+    scene.fog = settings.fog ? new THREE.Fog(settings.fog[0], settings.fog[1], settings.fog[2]) : null;
+    HALO_MATERIAL.color.set(settings.halo ?? INK);
+    envUpdate = settings.update || null;
 }
 
 /* ---------- the beaver ---------- */
@@ -528,6 +1004,10 @@ const RIFLE_HOLD = {
     home: { pos: [0.3, -0.26, -0.72], rot: [0.05, 0.14, 0.05] },
     inspect: { pos: [0.06, -0.16, -0.58], rot: [0.2, -1.0, -0.34] },
 };
+const SMG_HOLD = {
+    home: { pos: [0.26, -0.23, -0.64], rot: [0.05, 0.12, 0.04] },
+    inspect: { pos: [0.05, -0.14, -0.54], rot: [0.2, -1.0, -0.34] },
+};
 const PISTOL_HOLD = {
     home: { pos: [0.22, -0.2, -0.58], rot: [0.04, 0.1, 0.03] },
     inspect: { pos: [0.04, -0.12, -0.5], rot: [0.2, -1.0, -0.34] },
@@ -554,6 +1034,8 @@ const POLYMER = metal(0x34363a, 0.62, 0.2);
 const STEEL = metal(0xa29f96, 0.32, 0.65);
 const CHROME = metal(0xd2cfc6, 0.24, 0.7);
 const WOOD = metal(0x6e4424, 0.62, 0.05);
+const OLIVE = metal(0x5a6b41, 0.72, 0.12);
+const GLASS = metal(0x1d4a6e, 0.08, 0.9);
 
 function box(g, material, scale, position, rotation) {
     const mesh = new THREE.Mesh(UNIT_BOX, material);
@@ -901,22 +1383,221 @@ function buildRevolver() {
     return g;
 }
 
+// The AWP: a long olive chassis with a thumbhole stock, a fat scope on rings,
+// a bolt handle out to the side and a long barrel ending in a muzzle brake.
+function buildAwp() {
+    const g = new THREE.Group();
+
+    box(g, OLIVE, [0.11, 0.13, 0.9], [0, -0.02, -0.1]);
+    box(g, OLIVE, [0.1, 0.2, 0.34], [0, -0.06, 0.5]);
+    box(g, POLYMER, [0.105, 0.07, 0.18], [0, -0.03, 0.48]);
+    box(g, POLYMER, [0.11, 0.22, 0.03], [0, -0.06, 0.68]);
+    box(g, OLIVE, [0.09, 0.05, 0.22], [0, 0.07, 0.46]);
+
+    box(g, GUNMETAL, [0.08, 0.06, 0.42], [0, 0.07, -0.02]);
+    box(g, STEEL, [0.12, 0.018, 0.018], [0.07, 0.06, 0.12]);
+    const knob = new THREE.Mesh(UNIT_BALL, STEEL);
+    knob.scale.setScalar(0.022);
+    knob.position.set(0.135, 0.06, 0.12);
+    g.add(knob);
+
+    box(g, POLYMER, [0.075, 0.16, 0.14], [0, -0.16, -0.05]);
+    box(g, OLIVE, [0.08, 0.22, 0.1], [0, -0.18, 0.24], [0.35, 0, 0]);
+    box(g, GUNMETAL, [0.02, 0.012, 0.14], [0, -0.11, 0.1]);
+    box(g, STEEL, [0.014, 0.05, 0.016], [0, -0.09, 0.1]);
+
+    tube(g, GUNMETAL, 0.026, 1.1, [0, 0, -1.1]);
+    tube(g, GUNMETAL, 0.042, 0.13, [0, 0, -1.71]);
+    for (const z of [-1.68, -1.74]) box(g, POLYMER, [0.09, 0.012, 0.02], [0, 0, z]);
+
+    tube(g, POLYMER, 0.045, 0.7, [0, 0.2, -0.05]);
+    tube(g, POLYMER, 0.064, 0.14, [0, 0.2, -0.44]);
+    tube(g, POLYMER, 0.056, 0.12, [0, 0.2, 0.33]);
+    tube(g, GLASS, 0.056, 0.01, [0, 0.2, -0.515]);
+    tube(g, GLASS, 0.048, 0.01, [0, 0.2, 0.395]);
+    const turret = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.024, 0.06, 12), GUNMETAL);
+    turret.position.set(0, 0.26, -0.04);
+    g.add(turret);
+    const windage = turret.clone();
+    windage.rotation.z = Math.PI / 2;
+    windage.position.set(0.06, 0.2, -0.04);
+    g.add(windage);
+    for (const z of [-0.22, 0.12]) box(g, GUNMETAL, [0.05, 0.1, 0.05], [0, 0.12, z]);
+
+    attachMuzzle(g, [0, 0, -1.8], 0xffc36b);
+    return g;
+}
+
+// A pump shotgun: a receiver over a barrel and a magazine tube, a ribbed pump
+// that racks back after every shot, a bead sight and a wooden stock.
+function buildShotgun() {
+    const g = new THREE.Group();
+
+    box(g, GUNMETAL, [0.1, 0.13, 0.42], [0, 0, -0.02]);
+    box(g, POLYMER, [0.004, 0.05, 0.14], [0.051, 0.02, -0.04]);
+    tube(g, STEEL, 0.03, 1.0, [0, 0.035, -0.72]);
+    tube(g, GUNMETAL, 0.028, 0.8, [0, -0.04, -0.62]);
+    tube(g, GUNMETAL, 0.031, 0.03, [0, -0.04, -1.03]);
+    const bead = new THREE.Mesh(UNIT_BALL, STEEL);
+    bead.scale.setScalar(0.012);
+    bead.position.set(0, 0.07, -1.2);
+    g.add(bead);
+
+    const pump = new THREE.Group();
+    box(pump, POLYMER, [0.11, 0.1, 0.3], [0, -0.035, -0.5]);
+    for (let i = 0; i < 6; i++) box(pump, GUNMETAL, [0.114, 0.104, 0.012], [0, -0.035, -0.39 - i * 0.045]);
+    g.add(pump);
+    g.userData.pump = pump;
+
+    box(g, WOOD, [0.09, 0.16, 0.44], [0, -0.05, 0.42], [0.08, 0, 0]);
+    box(g, POLYMER, [0.095, 0.18, 0.03], [0, -0.07, 0.65], [0.08, 0, 0]);
+    box(g, WOOD, [0.08, 0.2, 0.1], [0, -0.15, 0.2], [0.45, 0, 0]);
+    box(g, GUNMETAL, [0.02, 0.012, 0.14], [0, -0.1, 0.06]);
+    box(g, STEEL, [0.014, 0.05, 0.016], [0, -0.08, 0.06]);
+
+    attachMuzzle(g, [0, 0.035, -1.24], 0xffb456);
+    return g;
+}
+
+// A compact SMG: a short railed receiver, a long suppressor, a vertical
+// foregrip, a stick magazine through the grip and a folded stock.
+function buildSmg() {
+    const g = new THREE.Group();
+
+    box(g, POLYMER, [0.08, 0.12, 0.44], [0, 0.03, -0.12]);
+    box(g, GUNMETAL, [0.05, 0.02, 0.4], [0, 0.1, -0.12]);
+    for (let i = 0; i < 7; i++) box(g, POLYMER, [0.054, 0.01, 0.02], [0, 0.114, 0.05 - i * 0.055]);
+    box(g, GUNMETAL, [0.07, 0.07, 0.16], [0, 0.03, -0.42]);
+    tube(g, POLYMER, 0.04, 0.36, [0, 0.03, -0.66]);
+    tube(g, GUNMETAL, 0.042, 0.02, [0, 0.03, -0.49]);
+
+    box(g, POLYMER, [0.05, 0.16, 0.05], [0, -0.1, -0.3], [0.1, 0, 0]);
+    box(g, POLYMER, [0.07, 0.24, 0.1], [0, -0.15, 0.05], [0.15, 0, 0]);
+    box(g, GUNMETAL, [0.05, 0.2, 0.08], [0, -0.34, 0.02], [0.15, 0, 0]);
+    box(g, GUNMETAL, [0.02, 0.012, 0.12], [0, -0.07, -0.08]);
+    box(g, STEEL, [0.014, 0.045, 0.016], [0, -0.05, -0.08]);
+
+    box(g, GUNMETAL, [0.016, 0.03, 0.3], [0.05, -0.02, 0.2]);
+    box(g, GUNMETAL, [0.016, 0.12, 0.03], [0.05, -0.07, 0.34]);
+    box(g, STEEL, [0.03, 0.02, 0.05], [0, 0.1, 0.1]);
+
+    attachMuzzle(g, [0, 0.03, -0.86], 0xffc36b);
+    return g;
+}
+
+/* ---------- inspects ----------
+
+   Every gun has its own. Each one is a function of how far through the
+   inspect it is, returning a handful of channels that updateGun layers onto
+   the resting pose: how far up into the inspect position (pose), turns in the
+   camera's frame (yaw, pitch, roll), a lift, turns about the gun's own axes
+   round its pivot (flip end over end, twist round the barrel), and the moving
+   parts (the revolver's cylinder, the shotgun's pump). Whole turns only, so
+   every inspect lands exactly where it started. */
+
+const TAU = Math.PI * 2;
+const hump = (t, a, b) => Math.sin(Math.PI * clamp((t - a) / (b - a), 0, 1));
+const raise = (t, edge = 0.16) => easeInOut(t / edge) * easeInOut((1 - t) / edge);
+
+const INSPECTS = {
+    // Up, one slow turn all the way round, back down.
+    showoff: (t) => ({
+        pose: raise(t, 0.18),
+        yaw: easeInOut((t - 0.12) / 0.7) * TAU,
+        roll: hump(t, 0.1, 0.9) * 0.45,
+    }),
+    // The deagle: two quick turns round the trigger finger, then onto its side.
+    twirl: (t) => ({
+        pose: raise(t, 0.15),
+        flip: easeInOut((t - 0.18) / 0.4) * TAU * 2,
+        roll: hump(t, 0.6, 0.92) * 0.95,
+        yaw: hump(t, 0.6, 0.92) * 0.45,
+    }),
+    // The rifle: rolled to show one side, over to the other, then tipped up
+    // to look down the rail.
+    sides: (t) => {
+        const a = hump(t, 0.12, 0.45);
+        const b = hump(t, 0.42, 0.74);
+        return {
+            pose: raise(t),
+            roll: a * 0.9 - b * 0.9,
+            yaw: a * 0.3 - b * 0.55,
+            pitch: hump(t, 0.7, 0.95) * 0.35,
+            lift: hump(t, 0.7, 0.95) * 0.02,
+        };
+    },
+    // The pistol: turned out, flipped over round the barrel to show the other
+    // side, and flipped back.
+    flipside: (t) => ({
+        pose: raise(t),
+        twist: Math.PI * (easeInOut((t - 0.22) / 0.22) - easeInOut((t - 0.6) / 0.22)),
+        yaw: hump(t, 0.15, 0.85) * 0.3,
+    }),
+    // The revolver: tilted to show the cylinder, the cylinder spun hard, then
+    // one spin backwards round the finger.
+    cylinder: (t) => ({
+        pose: raise(t),
+        roll: hump(t, 0.08, 0.55) * 0.9,
+        drum: easeOut((t - 0.12) / 0.38) * TAU * 3,
+        flip: -easeInOut((t - 0.58) / 0.3) * TAU,
+    }),
+    // The AWP: brought up and swung round so the scope glass faces you.
+    glass: (t) => ({
+        pose: raise(t, 0.14),
+        yaw: hump(t, 0.14, 0.86) * 2.5,
+        pitch: hump(t, 0.2, 0.8) * 0.2,
+        roll: hump(t, 0.3, 0.9) * 0.25,
+    }),
+    // The shotgun: tilted out and the pump racked twice.
+    rack: (t) => ({
+        pose: raise(t),
+        roll: hump(t, 0.1, 0.9) * 0.55,
+        yaw: hump(t, 0.1, 0.9) * 0.3,
+        pump: hump(t, 0.28, 0.44) + hump(t, 0.5, 0.66),
+    }),
+    // The SMG: tossed up, spun round its own barrel in the air, caught.
+    toss: (t) => ({
+        pose: raise(t, 0.14),
+        lift: hump(t, 0.2, 0.62) * 0.13,
+        twist: easeInOut((t - 0.22) / 0.36) * TAU,
+        yaw: hump(t, 0.15, 0.85) * 0.2,
+    }),
+};
+
+const REST = { pose: 0, yaw: 0, pitch: 0, roll: 0, lift: 0, flip: 0, twist: 0, drum: 0, pump: 0 };
+
 // How each gun handles. Cooldown is the fastest it will fire again, spread is
 // how far consecutive shots wander from the crosshair (in screen units), punch
 // is how far each shot kicks the view up. The scoring surface is the same for
 // all of them: the gun changes the rhythm, not the target.
 const WEAPONS = [
     { id: 'plasma', label: 'plasma rifle', build: buildPlasma, scale: 0.38, ...RIFLE_HOLD, showcase: 1.9,
+        inspectStyle: 'showoff', inspectMs: 2500,
         cooldown: 120, auto: false, kick: 7.4, punch: 0, spread: null, flash: 1, tracer: 0xffe9bd, tracerWidth: 1 },
     { id: 'ar', label: 'ar', build: buildRifle, scale: 0.36, ...RIFLE_HOLD, showcase: 2.05,
+        inspectStyle: 'sides', inspectMs: 3000,
         cooldown: 95, auto: true, kick: 3.2, punch: 0.0045, spread: { step: 0.005, max: 0.045 }, flash: 0.9, tracer: 0xffd88a, tracerWidth: 0.45 },
     { id: 'pistol', label: 'pistol', build: buildPistol, scale: 0.42, ...PISTOL_HOLD, showcase: 0.95,
+        inspectStyle: 'flipside', inspectMs: 2400, pivot: new THREE.Vector3(0, 0.02, -0.18),
         cooldown: 110, auto: false, kick: 4.6, punch: 0.006, spread: { step: 0.006, max: 0.03 }, flash: 0.75, tracer: 0xffd88a, tracerWidth: 0.4 },
     { id: 'deagle', label: 'deagle', build: buildDeagle, scale: 0.42, ...PISTOL_HOLD, showcase: 1.12,
         inspectStyle: 'twirl', inspectMs: 2600, pivot: new THREE.Vector3(0, -0.08, -0.12),
         cooldown: 380, auto: false, kick: 11, punch: 0.02, spread: { step: 0.03, max: 0.06 }, flash: 1.5, tracer: 0xffd08a, tracerWidth: 0.6 },
     { id: 'revolver', label: 'revolver', build: buildRevolver, scale: 0.42, ...PISTOL_HOLD, showcase: 1.25,
+        inspectStyle: 'cylinder', inspectMs: 3000, pivot: new THREE.Vector3(0, -0.08, 0.05),
         cooldown: 480, auto: false, kick: 9.5, punch: 0.016, spread: null, flash: 1.3, tracer: 0xffd08a, tracerWidth: 0.55 },
+    { id: 'awp', label: 'awp', build: buildAwp, scale: 0.34, ...RIFLE_HOLD, showcase: 2.1,
+        inspectStyle: 'glass', inspectMs: 3000,
+        cooldown: 1300, auto: false, kick: 13, punch: 0.03, spread: null, scope: true, unscopedSpread: 0.09,
+        flash: 1.6, tracer: 0xffe2a8, tracerWidth: 0.7 },
+    { id: 'shotgun', label: 'shotgun', build: buildShotgun, scale: 0.36, ...RIFLE_HOLD, showcase: 2.1,
+        inspectStyle: 'rack', inspectMs: 2600,
+        cooldown: 850, auto: false, kick: 12, punch: 0.025, spread: null, pellets: 9, pelletSpread: 0.075,
+        flash: 1.7, tracer: 0xffd08a, tracerWidth: 0.5 },
+    { id: 'smg', label: 'smg', build: buildSmg, scale: 0.4, ...SMG_HOLD, showcase: 1.35,
+        inspectStyle: 'toss', inspectMs: 2200, pivot: new THREE.Vector3(0, 0, -0.15),
+        cooldown: 70, auto: true, kick: 2.4, punch: 0.003, spread: { step: 0.007, max: 0.06 },
+        flash: 0.45, tracer: 0xffd88a, tracerWidth: 0.4 },
 ];
 
 let weapon = WEAPONS[0];
@@ -994,6 +1675,7 @@ function selectWeapon(id) {
     applyShowcaseLights();
     streak = 0;
     lastShotAt = -Infinity;
+    if (scoped) setScope(false);
 }
 
 // Recoil, sway, the pulsing core and the inspect animation, all folded into the
@@ -1004,6 +1686,23 @@ const twirlStill = new THREE.Vector3();
 const twirlTurned = new THREE.Vector3();
 const twirlTurn = new THREE.Quaternion();
 const X_AXIS = new THREE.Vector3(1, 0, 0);
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+const DEFAULT_PIVOT = new THREE.Vector3(0, -0.08, -0.1);
+let pumpStart = 0;
+
+// The AWP's scope: right click toggles it. Scoped, the view narrows, the gun
+// is out of frame and the overlay draws the reticle. Every shot unscopes, the
+// way it does in csgo.
+const SCOPE_FOV = 22;
+let scoped = false;
+
+function setScope(on) {
+    scoped = !!on && weapon.scope && running && !touchOnly;
+    elScope.hidden = !scoped;
+    crosshair.hidden = scoped || touchOnly || !running;
+    camera.fov = scoped ? SCOPE_FOV : BASE_FOV;
+    camera.updateProjectionMatrix();
+}
 
 function inspectLength() {
     return weapon.inspectMs || INSPECT_MS;
@@ -1036,33 +1735,15 @@ function updateGun(now, dt) {
     sway.x += (swayX - sway.x) * follow;
     sway.y += (swayY - sway.y) * follow;
 
-    // Inspect: the rifle comes up to the middle of the screen, turns all the
-    // way round so the far side and the muzzle cage are both visible, and drops
-    // back to the hip. A full turn ends where it started, so the spin needs no
-    // unwinding when the pose blend runs out.
-    let pose = 0;
-    let spin = 0;
-    let roll = 0;
-    let flip = 0;
+    // Inspect: whichever routine this gun has, sampled at how far through it
+    // is. Outside an inspect every channel is at rest.
+    let ins = REST;
     if (inspectStart) {
         const t = (now - inspectStart) / inspectLength();
-        if (t >= 1) {
-            inspectStart = 0;
-        } else if (weapon.inspectStyle === 'twirl') {
-            // The csgo deagle inspect: up, two quick turns round the trigger
-            // finger, then rolled onto its side to show the slide off before
-            // it drops back. Whole turns, so it lands exactly where it began.
-            pose = easeInOut(t / 0.15) * easeInOut((1 - t) / 0.15);
-            flip = easeInOut((t - 0.18) / 0.4) * Math.PI * 4;
-            const show = Math.sin(Math.PI * clamp((t - 0.6) / 0.32, 0, 1));
-            roll = show * 0.95;
-            spin = show * 0.45;
-        } else {
-            pose = easeInOut(t / 0.18) * easeInOut((1 - t) / 0.18);
-            spin = easeInOut((t - 0.12) / 0.7) * Math.PI * 2;
-            roll = Math.sin(Math.PI * clamp((t - 0.1) / 0.8, 0, 1)) * 0.45;
-        }
+        if (t >= 1) inspectStart = 0;
+        else ins = { ...REST, ...INSPECTS[weapon.inspectStyle || 'showoff'](t) };
     }
+    const { pose } = ins;
 
     const breathe = running ? 1 : 0.4;
     if (showcase) {
@@ -1081,25 +1762,26 @@ function updateGun(now, dt) {
     } else {
         gun.position.set(
             lerp(weapon.home.pos[0], weapon.inspect.pos[0], pose) - sway.x * 0.8 + Math.sin(now / 1400) * 0.004 * breathe,
-            lerp(weapon.home.pos[1], weapon.inspect.pos[1], pose) - sway.y * 0.5 + Math.sin(now / 900) * 0.005 * breathe + kick * 0.022,
+            lerp(weapon.home.pos[1], weapon.inspect.pos[1], pose) - sway.y * 0.5 + Math.sin(now / 900) * 0.005 * breathe + kick * 0.022 + ins.lift,
             lerp(weapon.home.pos[2], weapon.inspect.pos[2], pose) + kick * 0.1
         );
         gun.rotation.set(
-            lerp(weapon.home.rot[0], weapon.inspect.rot[0], pose) - kick * 0.26 + sway.y * 0.9,
-            lerp(weapon.home.rot[1], weapon.inspect.rot[1], pose) + sway.x * 1.1 + spin,
-            lerp(weapon.home.rot[2], weapon.inspect.rot[2], pose) + kick * 0.06 + roll
+            lerp(weapon.home.rot[0], weapon.inspect.rot[0], pose) - kick * 0.26 + sway.y * 0.9 + ins.pitch,
+            lerp(weapon.home.rot[1], weapon.inspect.rot[1], pose) + sway.x * 1.1 + ins.yaw,
+            lerp(weapon.home.rot[2], weapon.inspect.rot[2], pose) + kick * 0.06 + ins.roll
         );
 
-        // A twirl turns round the trigger guard, not the middle of the gun.
+        // Flips and twists turn round the gun's pivot (the trigger guard on a
+        // handgun), not its middle, and about the gun's own axes, so the barrel
+        // goes end over end whichever way the gun is angled at the time.
         // Rotating about the origin and then moving the gun by the difference
-        // between where the guard would sit with and without the flip keeps
-        // that point still while everything else swings round it.
-        // The turn is about the gun's own sideways axis, so the barrel sweeps
-        // up and over the hand whichever way the gun is angled at the time.
-        if (flip) {
-            TWIRL_PIVOT.copy(weapon.pivot).multiplyScalar(weapon.scale);
+        // between where the pivot sits with and without the turn keeps that
+        // point still while everything else swings round it.
+        if (ins.flip || ins.twist) {
+            TWIRL_PIVOT.copy(weapon.pivot || DEFAULT_PIVOT).multiplyScalar(weapon.scale);
             twirlStill.copy(TWIRL_PIVOT).applyQuaternion(gun.quaternion);
-            gun.quaternion.multiply(twirlTurn.setFromAxisAngle(X_AXIS, flip));
+            if (ins.flip) gun.quaternion.multiply(twirlTurn.setFromAxisAngle(X_AXIS, ins.flip));
+            if (ins.twist) gun.quaternion.multiply(twirlTurn.setFromAxisAngle(Z_AXIS, ins.twist));
             twirlTurned.copy(TWIRL_PIVOT).applyQuaternion(gun.quaternion);
             gun.position.add(twirlStill.sub(twirlTurned));
         }
@@ -1108,7 +1790,18 @@ function updateGun(now, dt) {
     // The revolver's cylinder turns one chamber per shot, quickly but not
     // instantly, so the turn reads.
     const drum = gun.userData.drum;
-    if (drum) drum.rotation.z += (gun.userData.drumAngle - drum.rotation.z) * Math.min(1, dt * 18);
+    if (drum) {
+        gun.userData.drumNow = (gun.userData.drumNow || 0) + (gun.userData.drumAngle - (gun.userData.drumNow || 0)) * Math.min(1, dt * 18);
+        drum.rotation.z = gun.userData.drumNow + ins.drum;
+    }
+
+    // The shotgun racks its pump after every shot, and twice in its inspect.
+    const pump = gun.userData.pump;
+    if (pump) {
+        const racked = pumpStart && now > pumpStart ? hump((now - pumpStart) / 420, 0, 1) : 0;
+        if (pumpStart && now - pumpStart > 420) pumpStart = 0;
+        pump.position.z = (racked + ins.pump) * 0.14;
+    }
 
     // The core breathes when idle and goes bright for the length of a shot.
     const heat = flashStart ? Math.max(0, 1 - (now - flashStart) / 260) : 0;
@@ -1158,6 +1851,7 @@ function fireGun(ndc) {
     // is the only thing keeping two shots from flashing identically.
     flash.userData.puff.material.rotation = Math.random() * Math.PI * 2;
     if (gun.userData.drum) gun.userData.drumAngle += Math.PI / 3;
+    if (gun.userData.pump) pumpStart = flashStart + 140;
 
     gun.updateMatrixWorld();
     muzzle.getWorldPosition(muzzleWorld);
@@ -1224,7 +1918,7 @@ function render() {
     if (!renderer) return;
     renderer.clear();
     renderer.render(scene, camera);
-    if (gun && gun.visible) {
+    if (gun && gun.visible && !scoped) {
         // Fresh depth for the viewmodel pass, so the rifle is always in front
         // of the arena no matter how close a target has spawned.
         renderer.clearDepth();
@@ -1242,8 +1936,11 @@ function applyLook() {
 
 function onMouseMove(event) {
     if (!running) return;
-    yaw -= event.movementX * LOOK_SPEED;
-    pitch -= event.movementY * LOOK_SPEED;
+    // Scoped in, the same hand movement should cover the same distance on
+    // screen, so the look speed shrinks with the field of view.
+    const speed = LOOK_SPEED * (scoped ? SCOPE_FOV / BASE_FOV : 1);
+    yaw -= event.movementX * speed;
+    pitch -= event.movementY * speed;
     pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch));
     applyLook();
     lookDelta.x += event.movementX;
@@ -1281,15 +1978,25 @@ function fire(ndc) {
     shots++;
 
     let aim = ndc || CENTRE;
-    if (weapon.spread && streak) {
-        const r = Math.min(weapon.spread.max, streak * weapon.spread.step) * Math.sqrt(Math.random());
+    const wander = (radius) => {
+        const r = radius * Math.sqrt(Math.random());
         const a = Math.random() * Math.PI * 2;
-        aim = new THREE.Vector2(aim.x + (Math.cos(a) * r) / camera.aspect, aim.y + Math.sin(a) * r);
-    }
+        return new THREE.Vector2(aim.x + (Math.cos(a) * r) / camera.aspect, aim.y + Math.sin(a) * r);
+    };
+    if (weapon.spread && streak) aim = wander(Math.min(weapon.spread.max, streak * weapon.spread.step));
+    // A sniper fired from the hip goes roughly where it is pointed. Not on a
+    // phone, where there is no way to scope in.
+    if (weapon.scope && !scoped && !ndc) aim = wander(weapon.unscopedSpread);
     fireGun(aim);
 
-    raycaster.setFromCamera(aim, camera);
-    const hit = raycaster.intersectObjects(targetGroup.children, true)[0];
+    // A shotgun sends a cone of pellets and scores the nearest target any of
+    // them finds. One hit per shot at most, so accuracy stays a fraction.
+    let hit;
+    for (let i = 0; i < (weapon.pellets || 1); i++) {
+        raycaster.setFromCamera(weapon.pellets ? wander(weapon.pelletSpread) : aim, camera);
+        const found = raycaster.intersectObjects(targetGroup.children, true)[0];
+        if (found && (!hit || found.distance < hit.distance)) hit = found;
+    }
 
     if (hit) {
         let target = hit.object;
@@ -1299,6 +2006,8 @@ function fire(ndc) {
         spawnBurst(hitPoint);
         placeTarget(target);
     }
+
+    if (scoped) setScope(false);
 
     // Recoil climbs the view, so a second shot has to pull back down onto the
     // target. Only with the pointer locked: on a phone the view does not move.
@@ -1349,6 +2058,7 @@ function lockPointer() {
 }
 
 function endRound() {
+    setScope(false);
     running = false;
     remainingMs = 0;
     stage.classList.remove('is-running');
@@ -1404,6 +2114,7 @@ function loop(now) {
 
     updateTargets(now);
     updateBursts(now);
+    if (envUpdate) envUpdate(now, dt);
     updateGun(now, dt);
 
     if (running && triggerHeld && weapon.auto) fire();
@@ -1420,6 +2131,7 @@ function loop(now) {
 
 function pause(message) {
     if (!running) return;
+    setScope(false);
     running = false;
     // Hold the clock where it stopped. The deadline is wall-clock, so without
     // this a player who tabs away comes back to a round that already expired.
@@ -1504,14 +2216,15 @@ function buildChips(container, options, selected, onPick) {
 
 // Mid-round the loadout is locked, so a paused run cannot swap guns halfway.
 function lockPicks(locked) {
-    for (const chip of [...elGuns.children, ...elTargets.children]) chip.disabled = locked;
+    for (const chip of [...elGuns.children, ...elTargets.children, ...elMaps.children]) chip.disabled = locked;
 }
 
 function updateHint() {
     if (touchOnly) {
         elHint.textContent = `tap the ${targetKind.id === 'bullseye' ? 'targets' : `${targetKind.label}s`} · tap the gun to inspect it`;
     } else {
-        elHint.textContent = `${weapon.auto ? 'hold to spray' : 'click to fire'} · move to aim · f to inspect · esc to pause`;
+        const fire = weapon.auto ? 'hold to spray' : weapon.scope ? 'click to fire · right click to scope' : 'click to fire';
+        elHint.textContent = `${fire} · move to aim · f to inspect · esc to pause`;
     }
 }
 
@@ -1650,6 +2363,11 @@ elReset.addEventListener('click', () => {
 canvas.addEventListener('pointerdown', (event) => {
     if (!running) return;
 
+    if (event.button === 2) {
+        if (weapon.scope) setScope(!scoped);
+        return;
+    }
+
     if (touchOnly || !document.pointerLockElement) {
         const box = canvas.getBoundingClientRect();
         const ndc = new THREE.Vector2(
@@ -1667,6 +2385,9 @@ canvas.addEventListener('pointerdown', (event) => {
     triggerHeld = true;
     fire();
 });
+
+// Right click is the scope, never the browser menu.
+stage.addEventListener('contextmenu', (event) => event.preventDefault());
 
 document.addEventListener('pointerup', () => {
     triggerHeld = false;
@@ -1713,6 +2434,7 @@ document.addEventListener('visibilitychange', () => {
 /* ---------- boot ---------- */
 
 selectTarget(recall(TARGET_KEY));
+selectMap(recall(MAP_KEY));
 buildScene();
 buildViewmodel();
 selectWeapon(recall(GUN_KEY));
@@ -1721,6 +2443,10 @@ buildChips(elGuns, WEAPONS, weapon.id, (id) => {
     selectWeapon(id);
     remember(GUN_KEY, id);
     updateHint();
+});
+buildChips(elMaps, MAPS, mapKind.id, (id) => {
+    selectMap(id);
+    remember(MAP_KEY, id);
 });
 buildChips(elTargets, TARGETS, targetKind.id, (id) => {
     selectTarget(id);

@@ -19,7 +19,7 @@ const MAX_SHOTS = 600;
 const NAME_MAX = 20;
 
 // The guns aim.js offers. Anything else is stored as the default.
-const GUNS = new Set(['plasma', 'ar', 'pistol', 'deagle', 'revolver']);
+const GUNS = new Set(['plasma', 'ar', 'pistol', 'deagle', 'revolver', 'awp', 'shotgun', 'smg']);
 
 // Saves per address per hour. Enough for someone grinding their own score,
 // not enough to flood the board with names.
