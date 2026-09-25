@@ -14,6 +14,8 @@ const TARGET_KEY = 'aim.target';
 const MAP_KEY = 'aim.map';
 const XH_KEY = 'aim.crosshair';
 const XH_COLOR_KEY = 'aim.crosshairColor';
+const SOUND_KEY = 'aim.sound';
+const SENS_KEY = 'aim.sensitivity';
 
 // The arena is a box the player stands in the middle of. Targets spawn on a
 // shell in front of them, never behind, so a round is never spent spinning.
@@ -26,7 +28,15 @@ const SPAWN = { minR: 10, maxR: 15, yMin: -2.4, yMax: 3.6, arc: Math.PI * 0.62 }
 // difficulty stays the same whichever one is up.
 const HIT_RADIUS = 0.95;
 
-const LOOK_SPEED = 0.0022;
+// Look speed follows csgo's formula: every unit of mouse movement turns the
+// view sensitivity x 0.022 degrees, so a csgo sensitivity carries over
+// roughly. Browsers report movement after the OS has had its say, so it will
+// not match to the decimal.
+const SENS_DEFAULT = 2.5;
+const SENS_MIN = 0.2;
+const SENS_MAX = 8;
+let sensitivity = SENS_DEFAULT;
+const lookSpeed = () => sensitivity * 0.022 * (Math.PI / 180);
 const PITCH_LIMIT = Math.PI / 2 - 0.12;
 
 // The page has one ink palette, so the beavers and the rifle stay inside it:
@@ -66,6 +76,13 @@ const elScope = document.getElementById('aimScope');
 const elCrosshairs = document.getElementById('aimCrosshairs');
 const elXhColors = document.getElementById('aimXhColors');
 const elXhPreview = document.getElementById('aimXhPreview');
+const elAmmo = document.getElementById('aimAmmo');
+const elAmmoGun = document.getElementById('aimAmmoGun');
+const elAmmoMag = document.getElementById('aimAmmoMag');
+const elAmmoFill = document.getElementById('aimAmmoFill');
+const elSound = document.getElementById('aimSound');
+const elSensRange = document.getElementById('aimSensRange');
+const elSensValue = document.getElementById('aimSensValue');
 
 // Touch devices have no pointer to lock, so they aim by tapping the target
 // directly and the copy changes to match.
@@ -1653,15 +1670,19 @@ function buildPlasma() {
     g.add(collar);
 
     // Energy cell slung under the receiver, lit along its middle.
+    // It is also the magazine: it drops out and a fresh one goes in on reload.
+    const pack = new THREE.Group();
     const cell = new THREE.Mesh(UNIT_BOX, dark);
     cell.scale.set(0.09, 0.17, 0.24);
     cell.position.set(0, -0.14, -0.26);
-    g.add(cell);
+    pack.add(cell);
 
     const charge = new THREE.Mesh(UNIT_BOX, core);
     charge.scale.set(0.1, 0.095, 0.17);
     charge.position.set(0, -0.14, -0.26);
-    g.add(charge);
+    pack.add(charge);
+    g.add(pack);
+    g.userData.mag = pack;
 
     // Grip, guard and trigger.
     const grip = new THREE.Mesh(UNIT_BOX, dark);
@@ -1744,8 +1765,11 @@ function buildRifle() {
     tube(g, GUNMETAL, 0.022, 0.34, [0, 0.03, -1.06]);
     tube(g, POLYMER, 0.032, 0.1, [0, 0.03, -1.26]);
 
-    box(g, POLYMER, [0.075, 0.2, 0.13], [0, -0.2, -0.14], [-0.1, 0, 0]);
-    box(g, POLYMER, [0.075, 0.16, 0.13], [0, -0.36, -0.2], [-0.32, 0, 0]);
+    const mag = new THREE.Group();
+    box(mag, POLYMER, [0.075, 0.2, 0.13], [0, -0.2, -0.14], [-0.1, 0, 0]);
+    box(mag, POLYMER, [0.075, 0.16, 0.13], [0, -0.36, -0.2], [-0.32, 0, 0]);
+    g.add(mag);
+    g.userData.mag = mag;
 
     box(g, POLYMER, [0.08, 0.26, 0.12], [0, -0.22, 0.17], [0.32, 0, 0]);
     box(g, GUNMETAL, [0.02, 0.012, 0.16], [0, -0.14, 0.06]);
@@ -1773,6 +1797,12 @@ function buildPistol() {
     box(g, STEEL, [0.05, 0.02, 0.02], [0, 0.1, 0]);
 
     box(g, POLYMER, [0.07, 0.26, 0.13], [0, -0.17, 0.03], [0.28, 0, 0]);
+    // The magazine, mostly inside the grip; the base plate is what shows.
+    const mag = new THREE.Group();
+    box(mag, GUNMETAL, [0.055, 0.22, 0.1], [0, -0.2, 0.035], [0.28, 0, 0]);
+    box(mag, POLYMER, [0.074, 0.025, 0.135], [0, -0.305, 0.066], [0.28, 0, 0]);
+    g.add(mag);
+    g.userData.mag = mag;
     box(g, POLYMER, [0.02, 0.012, 0.12], [0, -0.1, -0.12]);
     box(g, POLYMER, [0.02, 0.06, 0.012], [0, -0.07, -0.18]);
     box(g, STEEL, [0.014, 0.045, 0.016], [0, -0.06, -0.1]);
@@ -1798,6 +1828,11 @@ function buildDeagle() {
     box(g, STEEL, [0.03, 0.05, 0.03], [0, 0.11, 0.06], [-0.4, 0, 0]);
 
     box(g, POLYMER, [0.085, 0.3, 0.14], [0, -0.2, 0.04], [0.22, 0, 0]);
+    const mag = new THREE.Group();
+    box(mag, STEEL, [0.065, 0.26, 0.11], [0, -0.22, 0.045], [0.22, 0, 0]);
+    box(mag, POLYMER, [0.088, 0.025, 0.145], [0, -0.355, 0.075], [0.22, 0, 0]);
+    g.add(mag);
+    g.userData.mag = mag;
     box(g, STEEL, [0.02, 0.012, 0.14], [0, -0.1, -0.14]);
     box(g, STEEL, [0.02, 0.07, 0.012], [0, -0.07, -0.21]);
     box(g, STEEL, [0.014, 0.05, 0.016], [0, -0.06, -0.11]);
@@ -1853,13 +1888,22 @@ function buildAwp() {
     box(g, OLIVE, [0.09, 0.05, 0.22], [0, 0.07, 0.46]);
 
     box(g, GUNMETAL, [0.08, 0.06, 0.42], [0, 0.07, -0.02]);
-    box(g, STEEL, [0.12, 0.018, 0.018], [0.07, 0.06, 0.12]);
+    // The bolt handle turns up, comes back, goes forward and turns down after
+    // every shot. It pivots where it meets the receiver.
+    const boltGroup = new THREE.Group();
+    boltGroup.position.set(0.01, 0.06, 0.12);
+    box(boltGroup, STEEL, [0.12, 0.018, 0.018], [0.06, 0, 0]);
     const knob = new THREE.Mesh(UNIT_BALL, STEEL);
     knob.scale.setScalar(0.022);
-    knob.position.set(0.135, 0.06, 0.12);
-    g.add(knob);
+    knob.position.set(0.125, 0, 0);
+    boltGroup.add(knob);
+    g.add(boltGroup);
+    g.userData.boltGroup = boltGroup;
 
-    box(g, POLYMER, [0.075, 0.16, 0.14], [0, -0.16, -0.05]);
+    const mag = new THREE.Group();
+    box(mag, POLYMER, [0.075, 0.16, 0.14], [0, -0.16, -0.05]);
+    g.add(mag);
+    g.userData.mag = mag;
     box(g, OLIVE, [0.08, 0.22, 0.1], [0, -0.18, 0.24], [0.35, 0, 0]);
     box(g, GUNMETAL, [0.02, 0.012, 0.14], [0, -0.11, 0.1]);
     box(g, STEEL, [0.014, 0.05, 0.016], [0, -0.09, 0.1]);
@@ -1901,6 +1945,14 @@ function buildShotgun() {
     bead.position.set(0, 0.07, -1.2);
     g.add(bead);
 
+    const shell = new THREE.Group();
+    tube(shell, metal(0xb3261e, 0.5, 0.1), 0.022, 0.1, [0, 0, 0.01], 10);
+    tube(shell, metal(0xc9a25a, 0.3, 0.8), 0.023, 0.03, [0, 0, 0.07], 10);
+    shell.position.set(0, -0.2, -0.04);
+    shell.visible = false;
+    g.add(shell);
+    g.userData.shell = shell;
+
     const pump = new THREE.Group();
     box(pump, POLYMER, [0.11, 0.1, 0.3], [0, -0.035, -0.5]);
     for (let i = 0; i < 6; i++) box(pump, GUNMETAL, [0.114, 0.104, 0.012], [0, -0.035, -0.39 - i * 0.045]);
@@ -1931,7 +1983,10 @@ function buildSmg() {
 
     box(g, POLYMER, [0.05, 0.16, 0.05], [0, -0.1, -0.3], [0.1, 0, 0]);
     box(g, POLYMER, [0.07, 0.24, 0.1], [0, -0.15, 0.05], [0.15, 0, 0]);
-    box(g, GUNMETAL, [0.05, 0.2, 0.08], [0, -0.34, 0.02], [0.15, 0, 0]);
+    const mag = new THREE.Group();
+    box(mag, GUNMETAL, [0.05, 0.2, 0.08], [0, -0.34, 0.02], [0.15, 0, 0]);
+    g.add(mag);
+    g.userData.mag = mag;
     box(g, GUNMETAL, [0.02, 0.012, 0.12], [0, -0.07, -0.08]);
     box(g, STEEL, [0.014, 0.045, 0.016], [0, -0.05, -0.08]);
 
@@ -2022,7 +2077,72 @@ const INSPECTS = {
     }),
 };
 
-const REST = { pose: 0, yaw: 0, pitch: 0, roll: 0, lift: 0, flip: 0, twist: 0, drum: 0, pump: 0 };
+const REST = {
+    pose: 0, yaw: 0, pitch: 0, roll: 0, lift: 0, back: 0,
+    flip: 0, twist: 0, drum: 0, pump: 0, mag: 0, bolt: 0, swing: 0, shell: 0,
+};
+
+/* ---------- reloads ----------
+
+   Same channels as the inspects, plus the parts a reload moves: how far the
+   magazine has dropped out (mag), where the AWP's bolt is in its cycle (bolt),
+   how far the revolver's cylinder has swung out (swing), and a shell on its
+   way into the shotgun (shell). Every reload ends with every channel back at
+   zero, so the gun settles straight into its resting pose. */
+
+const span = (t, a, b) => easeInOut((t - a) / (b - a));
+
+const RELOADS = {
+    // Tilted in, the old magazine dropped, a fresh one seated, then the slide
+    // or the charging handle racked.
+    mag: (t) => {
+        const tilt = hump(t, 0, 1);
+        return {
+            roll: tilt * 0.5,
+            pitch: tilt * 0.12,
+            lift: -tilt * 0.035,
+            mag: span(t, 0.1, 0.3) - span(t, 0.42, 0.66),
+            back: hump(t, 0.78, 0.92) * 0.045,
+        };
+    },
+    // The AWP: magazine out and in, then the bolt worked to chamber a round.
+    bolt: (t) => {
+        const tilt = hump(t, 0, 1);
+        return {
+            roll: tilt * 0.45,
+            pitch: tilt * 0.1,
+            lift: -tilt * 0.03,
+            mag: span(t, 0.08, 0.24) - span(t, 0.34, 0.54),
+            bolt: clamp((t - 0.64) / 0.32, 0, 1),
+        };
+    },
+    // The revolver: cylinder swung out, emptied and spun, reloaded, closed.
+    cylinder: (t) => {
+        const tilt = hump(t, 0, 1);
+        return {
+            roll: tilt * 0.9,
+            pitch: tilt * 0.2,
+            swing: span(t, 0.08, 0.22) - span(t, 0.8, 0.92),
+            drum: span(t, 0.25, 0.75) * TAU,
+            lift: -hump(t, 0.35, 0.6) * 0.02,
+        };
+    },
+    // The shotgun: turned on its side, a shell pushed in each beat.
+    shells: (t, phase) => ({
+        roll: raise(t, 0.08) * 0.45,
+        yaw: raise(t, 0.08) * 0.2,
+        lift: -Math.sin(phase * Math.PI) * 0.012,
+        shell: phase < 0.7 ? phase / 0.7 : 0,
+    }),
+};
+
+// Where the AWP's bolt handle is for a point in its cycle: up, back, forward,
+// down.
+function boltPose(b) {
+    const up = span(b, 0, 0.22) - span(b, 0.78, 1);
+    const pull = span(b, 0.26, 0.46) - span(b, 0.52, 0.74);
+    return { turn: up * 1.1, pull: pull * 0.14 };
+}
 
 // How each gun handles. Cooldown is the fastest it will fire again, spread is
 // how far consecutive shots wander from the crosshair (in screen units), punch
@@ -2030,30 +2150,30 @@ const REST = { pose: 0, yaw: 0, pitch: 0, roll: 0, lift: 0, flip: 0, twist: 0, d
 // all of them: the gun changes the rhythm, not the target.
 const WEAPONS = [
     { id: 'plasma', label: 'plasma rifle', build: buildPlasma, scale: 0.38, ...RIFLE_HOLD, showcase: 1.9,
-        inspectStyle: 'showoff', inspectMs: 2500,
+        inspectStyle: 'showoff', inspectMs: 2500, mag: 40, reloadStyle: 'mag', reloadMs: 1900,
         cooldown: 120, auto: false, kick: 7.4, punch: 0, spread: null, flash: 1, tracer: 0xffe9bd, tracerWidth: 1 },
     { id: 'ar', label: 'ar', build: buildRifle, scale: 0.36, ...RIFLE_HOLD, showcase: 2.05,
-        inspectStyle: 'sides', inspectMs: 3000,
+        inspectStyle: 'sides', inspectMs: 3000, mag: 30, reloadStyle: 'mag', reloadMs: 2300,
         cooldown: 95, auto: true, kick: 3.2, punch: 0.0045, spread: { step: 0.005, max: 0.045 }, flash: 0.9, tracer: 0xffd88a, tracerWidth: 0.45 },
     { id: 'pistol', label: 'pistol', build: buildPistol, scale: 0.42, ...PISTOL_HOLD, showcase: 0.95,
-        inspectStyle: 'flipside', inspectMs: 2400, pivot: new THREE.Vector3(0, 0.02, -0.18),
+        inspectStyle: 'flipside', inspectMs: 2400, mag: 20, reloadStyle: 'mag', reloadMs: 1600, pivot: new THREE.Vector3(0, 0.02, -0.18),
         cooldown: 110, auto: false, kick: 4.6, punch: 0.006, spread: { step: 0.006, max: 0.03 }, flash: 0.75, tracer: 0xffd88a, tracerWidth: 0.4 },
     { id: 'deagle', label: 'deagle', build: buildDeagle, scale: 0.42, ...PISTOL_HOLD, showcase: 1.12,
-        inspectStyle: 'twirl', inspectMs: 2600, pivot: new THREE.Vector3(0, -0.08, -0.12),
+        inspectStyle: 'twirl', inspectMs: 2600, mag: 7, reloadStyle: 'mag', reloadMs: 1900, pivot: new THREE.Vector3(0, -0.08, -0.12),
         cooldown: 380, auto: false, kick: 11, punch: 0.02, spread: { step: 0.03, max: 0.06 }, flash: 1.5, tracer: 0xffd08a, tracerWidth: 0.6 },
     { id: 'revolver', label: 'revolver', build: buildRevolver, scale: 0.42, ...PISTOL_HOLD, showcase: 1.25,
-        inspectStyle: 'cylinder', inspectMs: 3000, pivot: new THREE.Vector3(0, -0.08, 0.05),
+        inspectStyle: 'cylinder', inspectMs: 3000, mag: 8, reloadStyle: 'cylinder', reloadMs: 2300, pivot: new THREE.Vector3(0, -0.08, 0.05),
         cooldown: 480, auto: false, kick: 9.5, punch: 0.016, spread: null, flash: 1.3, tracer: 0xffd08a, tracerWidth: 0.55 },
     { id: 'awp', label: 'awp', build: buildAwp, scale: 0.34, ...RIFLE_HOLD, showcase: 2.1,
-        inspectStyle: 'glass', inspectMs: 3000,
+        inspectStyle: 'glass', inspectMs: 3000, mag: 10, reloadStyle: 'bolt', reloadMs: 2700, boltAction: true,
         cooldown: 1300, auto: false, kick: 13, punch: 0.03, spread: null, scope: true, unscopedSpread: 0.09,
         flash: 1.6, tracer: 0xffe2a8, tracerWidth: 0.7 },
     { id: 'shotgun', label: 'shotgun', build: buildShotgun, scale: 0.36, ...RIFLE_HOLD, showcase: 2.1,
-        inspectStyle: 'rack', inspectMs: 2600,
+        inspectStyle: 'rack', inspectMs: 2600, mag: 8, reloadStyle: 'shells', shellMs: 480,
         cooldown: 850, auto: false, kick: 12, punch: 0.025, spread: null, pellets: 9, pelletSpread: 0.075,
         flash: 1.7, tracer: 0xffd08a, tracerWidth: 0.5 },
     { id: 'smg', label: 'smg', build: buildSmg, scale: 0.4, ...SMG_HOLD, showcase: 1.35,
-        inspectStyle: 'toss', inspectMs: 2200, pivot: new THREE.Vector3(0, 0, -0.15),
+        inspectStyle: 'toss', inspectMs: 2200, mag: 30, reloadStyle: 'mag', reloadMs: 1900, pivot: new THREE.Vector3(0, 0, -0.15),
         cooldown: 70, auto: true, kick: 2.4, punch: 0.003, spread: { step: 0.007, max: 0.06 },
         flash: 0.45, tracer: 0xffd88a, tracerWidth: 0.4 },
 ];
@@ -2148,6 +2268,234 @@ const Z_AXIS = new THREE.Vector3(0, 0, 1);
 const DEFAULT_PIVOT = new THREE.Vector3(0, -0.08, -0.1);
 let pumpStart = 0;
 
+/* ---------- ammo ---------- */
+
+// Rounds in the magazine for each gun, refilled at the start of a round.
+// Reserve is endless: this is an aim trainer, not an economy.
+const ammo = {};
+let reloadStart = 0;
+let reloadLength = 0;
+let reloadFrom = 0;
+let autoReloadAt = 0;
+// The AWP works its bolt after every shot, then scopes back in if it was
+// scoped when it fired, the way csgo does.
+const BOLT_MS = 950;
+let chamberStart = 0;
+let rezoom = false;
+
+function fillAmmo() {
+    for (const w of WEAPONS) ammo[w.id] = w.mag;
+}
+
+function startReload() {
+    if (!running || reloadStart || ammo[weapon.id] >= weapon.mag) return;
+    if (scoped) setScope(false);
+    rezoom = false;
+    chamberStart = 0;
+    inspectStart = 0;
+    clearTimeout(autoReloadAt);
+    autoReloadAt = 0;
+    reloadFrom = ammo[weapon.id];
+    reloadStart = performance.now();
+    reloadLength = weapon.reloadStyle === 'shells'
+        ? weapon.shellMs * (weapon.mag - reloadFrom)
+        : weapon.reloadMs;
+    reloadSounds();
+    updateAmmo();
+}
+
+function cancelReload() {
+    reloadStart = 0;
+    stopQueued();
+    updateAmmo();
+}
+
+// Called every frame: loads shotgun shells as they go in, finishes reloads,
+// closes the AWP's bolt, and starts the reload an empty magazine asks for.
+function tickAmmo(now) {
+    if (reloadStart) {
+        const elapsed = now - reloadStart;
+        if (weapon.reloadStyle === 'shells') {
+            ammo[weapon.id] = Math.min(weapon.mag, reloadFrom + Math.floor(elapsed / weapon.shellMs));
+        }
+        if (elapsed >= reloadLength) {
+            ammo[weapon.id] = weapon.mag;
+            reloadStart = 0;
+        }
+        updateAmmo();
+    }
+    if (chamberStart && now > chamberStart + BOLT_MS) {
+        chamberStart = 0;
+        if (rezoom && running && !reloadStart) setScope(true);
+        rezoom = false;
+    }
+}
+
+function updateAmmo() {
+    const left = ammo[weapon.id] ?? weapon.mag;
+    elAmmoGun.textContent = weapon.label;
+    elAmmoMag.textContent = String(left);
+    elAmmo.classList.toggle('is-low', left <= Math.ceil(weapon.mag * 0.2));
+    elAmmo.classList.toggle('is-reloading', !!reloadStart);
+    const progress = reloadStart ? clamp((performance.now() - reloadStart) / reloadLength, 0, 1) : 0;
+    elAmmoFill.style.width = `${progress * 100}%`;
+}
+
+/* ---------- sound ----------
+
+   Everything is synthesised with Web Audio, so there are no files to load: a
+   shot is a burst of filtered noise for the crack and a falling tone for the
+   thump, shaped per gun. Reload clicks are short band-passed ticks, scheduled
+   against the reload's own timing so they land with the animation. */
+
+let soundOn = true;
+let audio = null;
+let master = null;
+let noiseBuffer = null;
+let queued = [];
+
+function sound() {
+    if (!soundOn) return null;
+    if (!audio) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        audio = new Ctx();
+        master = audio.createGain();
+        master.gain.value = 0.45;
+        master.connect(audio.destination);
+        noiseBuffer = audio.createBuffer(1, audio.sampleRate, audio.sampleRate);
+        const data = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    }
+    if (audio.state === 'suspended') audio.resume();
+    return audio;
+}
+
+function burst({ at = 0, cutoff = 4000, type = 'lowpass', q = 0.7, decay = 0.2, volume = 0.5, queue = false }) {
+    const ctx = sound();
+    if (!ctx) return;
+    const t = ctx.currentTime + at;
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuffer;
+    const filter = ctx.createBiquadFilter();
+    filter.type = type;
+    filter.Q.value = q;
+    filter.frequency.setValueAtTime(cutoff, t);
+    if (type === 'lowpass') filter.frequency.exponentialRampToValueAtTime(Math.max(180, cutoff * 0.08), t + decay);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(volume, t);
+    gain.gain.exponentialRampToValueAtTime(0.0008, t + decay);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(master);
+    src.start(t, Math.random() * 0.5);
+    src.stop(t + decay + 0.05);
+    if (queue) queued.push(src);
+}
+
+function tone({ at = 0, from = 140, to = 40, decay = 0.15, volume = 0.5, type = 'sine' }) {
+    const ctx = sound();
+    if (!ctx) return;
+    const t = ctx.currentTime + at;
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(from, t);
+    osc.frequency.exponentialRampToValueAtTime(to, t + decay);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(volume, t);
+    gain.gain.exponentialRampToValueAtTime(0.0008, t + decay);
+    osc.connect(gain);
+    gain.connect(master);
+    osc.start(t);
+    osc.stop(t + decay + 0.05);
+}
+
+const tick = (at, pitch = 3000, volume = 0.22) =>
+    burst({ at, cutoff: pitch, type: 'bandpass', q: 5, decay: 0.045, volume, queue: true });
+
+function stopQueued() {
+    for (const src of queued) {
+        try {
+            src.stop();
+        } catch {
+            // already finished
+        }
+    }
+    queued = [];
+}
+
+const SHOT_SOUNDS = {
+    plasma: () => {
+        tone({ from: 1400, to: 180, decay: 0.2, volume: 0.22, type: 'sawtooth' });
+        burst({ cutoff: 2600, decay: 0.12, volume: 0.25 });
+    },
+    ar: () => {
+        burst({ cutoff: 6000, decay: 0.16, volume: 0.55 });
+        tone({ from: 140, to: 45, decay: 0.1, volume: 0.5 });
+    },
+    pistol: () => {
+        burst({ cutoff: 5200, decay: 0.12, volume: 0.45 });
+        tone({ from: 180, to: 60, decay: 0.08, volume: 0.35 });
+    },
+    deagle: () => {
+        burst({ cutoff: 7000, decay: 0.36, volume: 0.8 });
+        tone({ from: 110, to: 35, decay: 0.22, volume: 0.75 });
+    },
+    revolver: () => {
+        burst({ cutoff: 6500, decay: 0.32, volume: 0.72 });
+        tone({ from: 120, to: 40, decay: 0.2, volume: 0.6 });
+    },
+    // The AWP: a sharp crack, a heavy boom under it, and the echo coming back.
+    awp: () => {
+        burst({ cutoff: 12000, decay: 0.07, volume: 0.9 });
+        burst({ cutoff: 5200, decay: 0.6, volume: 0.62 });
+        tone({ from: 95, to: 28, decay: 0.32, volume: 0.95 });
+        burst({ at: 0.14, cutoff: 1600, decay: 0.55, volume: 0.16 });
+    },
+    shotgun: () => {
+        burst({ cutoff: 4500, decay: 0.42, volume: 0.85 });
+        tone({ from: 90, to: 30, decay: 0.24, volume: 0.8 });
+    },
+    smg: () => {
+        burst({ cutoff: 2200, decay: 0.07, volume: 0.3 });
+        tone({ from: 220, to: 90, decay: 0.05, volume: 0.2 });
+    },
+};
+
+// Clicks for each reload, at the points in the animation they belong to.
+function reloadSounds() {
+    const L = reloadLength / 1000;
+    if (weapon.reloadStyle === 'shells') {
+        for (let i = 0; i < weapon.mag - reloadFrom; i++) tick(((i + 0.55) * weapon.shellMs) / 1000, 2200, 0.28);
+    } else if (weapon.reloadStyle === 'cylinder') {
+        tick(L * 0.12, 2600);
+        for (let i = 0; i < 4; i++) tick(L * (0.3 + i * 0.03), 4200, 0.12);
+        tick(L * 0.52, 2000, 0.26);
+        tick(L * 0.9, 2400, 0.3);
+    } else {
+        tick(L * 0.14, 2400);
+        tick(L * 0.58, 1800, 0.3);
+        if (weapon.reloadStyle === 'bolt') {
+            tick(L * 0.68, 3200);
+            tick(L * 0.78, 2600);
+            tick(L * 0.88, 2800);
+            tick(L * 0.96, 3400);
+        } else {
+            tick(L * 0.8, 3000);
+            tick(L * 0.86, 2400);
+        }
+    }
+}
+
+function boltSounds() {
+    const start = 0.15;
+    const L = BOLT_MS / 1000;
+    tick(start + L * 0.12, 3200);
+    tick(start + L * 0.4, 2600);
+    tick(start + L * 0.62, 2800);
+    tick(start + L * 0.9, 3400);
+}
+
 // The AWP's scope: right click toggles it. Scoped, the view narrows, the gun
 // is out of frame and the overlay draws the reticle. Every shot unscopes, the
 // way it does in csgo.
@@ -2201,6 +2549,13 @@ function updateGun(now, dt) {
         if (t >= 1) inspectStart = 0;
         else ins = { ...REST, ...INSPECTS[weapon.inspectStyle || 'showoff'](t) };
     }
+    // A reload overrides any inspect: the gun is busy.
+    if (reloadStart) {
+        const elapsed = now - reloadStart;
+        const t = clamp(elapsed / reloadLength, 0, 1);
+        const phase = weapon.shellMs ? (elapsed % weapon.shellMs) / weapon.shellMs : 0;
+        ins = { ...REST, ...RELOADS[weapon.reloadStyle](t, phase) };
+    }
     const { pose } = ins;
 
     const breathe = running ? 1 : 0.4;
@@ -2221,7 +2576,7 @@ function updateGun(now, dt) {
         gun.position.set(
             lerp(weapon.home.pos[0], weapon.inspect.pos[0], pose) - sway.x * 0.8 + Math.sin(now / 1400) * 0.004 * breathe,
             lerp(weapon.home.pos[1], weapon.inspect.pos[1], pose) - sway.y * 0.5 + Math.sin(now / 900) * 0.005 * breathe + kick * 0.022 + ins.lift,
-            lerp(weapon.home.pos[2], weapon.inspect.pos[2], pose) + kick * 0.1
+            lerp(weapon.home.pos[2], weapon.inspect.pos[2], pose) + kick * 0.1 + ins.back
         );
         gun.rotation.set(
             lerp(weapon.home.rot[0], weapon.inspect.rot[0], pose) - kick * 0.26 + sway.y * 0.9 + ins.pitch,
@@ -2251,6 +2606,32 @@ function updateGun(now, dt) {
     if (drum) {
         gun.userData.drumNow = (gun.userData.drumNow || 0) + (gun.userData.drumAngle - (gun.userData.drumNow || 0)) * Math.min(1, dt * 18);
         drum.rotation.z = gun.userData.drumNow + ins.drum;
+        // Swung out to the side for a reload.
+        drum.position.x = ins.swing * 0.13;
+    }
+
+    // The magazine drops down out of the gun and a new one comes back up.
+    // Hidden at the bottom of the drop, which is where the swap happens.
+    const mag = gun.userData.mag;
+    if (mag) {
+        mag.position.set(0, -ins.mag * 0.45, ins.mag * 0.06);
+        mag.visible = ins.mag < 0.97;
+    }
+
+    // The AWP's bolt: its reload cycle, or the one after every shot.
+    const handle = gun.userData.boltGroup;
+    if (handle) {
+        const cycle = chamberStart && now > chamberStart ? clamp((now - chamberStart) / BOLT_MS, 0, 1) : 0;
+        const b = boltPose(ins.bolt || cycle);
+        handle.rotation.z = b.turn;
+        handle.position.z = 0.12 + b.pull;
+    }
+
+    // A shotgun shell rising into the loading port.
+    const shell = gun.userData.shell;
+    if (shell) {
+        shell.visible = ins.shell > 0;
+        shell.position.y = -0.2 + ins.shell * 0.12;
     }
 
     // The shotgun racks its pump after every shot, and twice in its inspect.
@@ -2396,7 +2777,7 @@ function onMouseMove(event) {
     if (!running) return;
     // Scoped in, the same hand movement should cover the same distance on
     // screen, so the look speed shrinks with the field of view.
-    const speed = LOOK_SPEED * (scoped ? SCOPE_FOV / BASE_FOV : 1);
+    const speed = lookSpeed() * (scoped ? SCOPE_FOV / BASE_FOV : 1);
     yaw -= event.movementX * speed;
     pitch -= event.movementY * speed;
     pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch));
@@ -2428,6 +2809,25 @@ function fire(ndc) {
     if (!running) return;
     const now = performance.now();
     if (now - lastShotAt < weapon.cooldown) return;
+    // Settle any reload or bolt that finished since the last frame, so a
+    // click never waits on the render loop to notice.
+    tickAmmo(now);
+
+    // Mid-reload the gun is busy, except the shotgun, which can fire whatever
+    // shells are already in, cutting the reload short, as in csgo.
+    if (reloadStart) {
+        if (weapon.reloadStyle === 'shells' && ammo[weapon.id] > 0) cancelReload();
+        else return;
+    }
+    if (chamberStart) return;
+    if (ammo[weapon.id] <= 0) {
+        lastShotAt = now;
+        tick(0, 1800, 0.35);
+        startReload();
+        return;
+    }
+    ammo[weapon.id]--;
+    (SHOT_SOUNDS[weapon.id] || SHOT_SOUNDS.ar)();
 
     // Shots fired close together wander further from where the player aimed,
     // which is what keeps holding down the AR from being free hits.
@@ -2460,12 +2860,32 @@ function fire(ndc) {
         let target = hit.object;
         while (target.parent && target.parent !== targetGroup) target = target.parent;
         hits++;
+        tone({ at: 0.03, from: 1300, to: 1050, decay: 0.09, volume: 0.12, type: 'triangle' });
         hitPoint.copy(target.position);
         spawnBurst(hitPoint);
         placeTarget(target);
     }
 
+    // The AWP: out of the scope on the shot, the bolt worked, and back into the
+    // scope once it closes if it was scoped when it fired.
+    if (weapon.boltAction && ammo[weapon.id] > 0) {
+        rezoom = scoped;
+        chamberStart = now + 150;
+        boltSounds();
+    }
     if (scoped) setScope(false);
+
+    // An empty magazine reloads itself a beat after the last round.
+    // On a timer rather than the frame loop, so it happens on time even if
+    // the tab is drawing slowly.
+    if (ammo[weapon.id] === 0) {
+        clearTimeout(autoReloadAt);
+        autoReloadAt = setTimeout(() => {
+            autoReloadAt = 0;
+            if (running && ammo[weapon.id] === 0) startReload();
+        }, 280);
+    }
+    updateAmmo();
 
     // Recoil climbs the view, so a second shot has to pull back down onto the
     // target. Only with the pointer locked: on a phone the view does not move.
@@ -2500,6 +2920,14 @@ function startRound() {
     hud.setAttribute('aria-hidden', 'false');
     crosshair.hidden = false;
     showGun(true);
+    fillAmmo();
+    reloadStart = 0;
+    chamberStart = 0;
+    clearTimeout(autoReloadAt);
+    autoReloadAt = 0;
+    rezoom = false;
+    elAmmo.hidden = false;
+    updateAmmo();
     setNote('');
     updateHud();
 
@@ -2517,6 +2945,11 @@ function lockPointer() {
 
 function endRound() {
     setScope(false);
+    cancelReload();
+    chamberStart = 0;
+    clearTimeout(autoReloadAt);
+    autoReloadAt = 0;
+    elAmmo.hidden = true;
     running = false;
     remainingMs = 0;
     stage.classList.remove('is-running');
@@ -2575,6 +3008,7 @@ function loop(now) {
     if (envUpdate) envUpdate(now, dt);
     updateGun(now, dt);
 
+    if (running) tickAmmo(now);
     if (running && triggerHeld && weapon.auto) fire();
 
     if (running) {
@@ -2590,6 +3024,13 @@ function loop(now) {
 function pause(message) {
     if (!running) return;
     setScope(false);
+    // A reload does not survive a pause; the magazine keeps what it had.
+    cancelReload();
+    chamberStart = 0;
+    clearTimeout(autoReloadAt);
+    autoReloadAt = 0;
+    rezoom = false;
+    elAmmo.hidden = true;
     running = false;
     // Hold the clock where it stopped. The deadline is wall-clock, so without
     // this a player who tabs away comes back to a round that already expired.
@@ -2626,6 +3067,8 @@ function resume() {
     hud.setAttribute('aria-hidden', 'false');
     crosshair.hidden = touchOnly;
     showGun(true);
+    elAmmo.hidden = false;
+    updateAmmo();
     setNote('');
     if (!touchOnly) lockPointer();
 }
@@ -2733,7 +3176,7 @@ function updateHint() {
         elHint.textContent = `tap the ${targetKind.id === 'bullseye' ? 'targets' : `${targetKind.label}s`} · tap the gun to inspect it`;
     } else {
         const fire = weapon.auto ? 'hold to spray' : weapon.scope ? 'click to fire · right click to scope' : 'click to fire';
-        elHint.textContent = `${fire} · move to aim · f to inspect · esc to pause`;
+        elHint.textContent = `${fire} · r to reload · f to inspect · esc to pause`;
     }
 }
 
@@ -2742,6 +3185,12 @@ function updateHint() {
 // The board lives behind the Worker. On a static host there is no /api, so the
 // first failed read marks it offline and the save button never shows.
 let boardOnline = false;
+
+// Where the leaderboard lives. The Worker serves it at /api/aim on its own
+// origin; the GitHub Pages copy of the site has no server, so it calls the
+// Worker's address across origins instead (the Worker allows that route).
+const AIM_WORKER = 'https://youdahe-com.WORKERS_SUBDOMAIN.workers.dev';
+const AIM_API = `${location.hostname.endsWith('github.io') ? AIM_WORKER : ''}/api/aim`;
 
 function renderBoard(scores, mine) {
     elBoard.replaceChildren();
@@ -2781,7 +3230,7 @@ function renderBoard(scores, mine) {
 
 async function loadBoard() {
     try {
-        const res = await fetch('/api/aim', { cache: 'no-store' });
+        const res = await fetch(AIM_API, { cache: 'no-store' });
         if (!res.ok) throw new Error(String(res.status));
         const { scores } = await res.json();
         boardOnline = true;
@@ -2821,7 +3270,7 @@ async function saveScore(event) {
     elSaveBtn.disabled = true;
     elSaveMsg.textContent = 'saving…';
     try {
-        const res = await fetch('/api/aim', {
+        const res = await fetch(AIM_API, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ name, score: lastRun.score, shots: lastRun.shots, gun: lastRun.gun }),
@@ -2873,7 +3322,10 @@ canvas.addEventListener('pointerdown', (event) => {
     if (!running) return;
 
     if (event.button === 2) {
-        if (weapon.scope) setScope(!scoped);
+        if (weapon.scope && !reloadStart) {
+            rezoom = false;
+            setScope(!scoped);
+        }
         return;
     }
 
@@ -2893,6 +3345,29 @@ canvas.addEventListener('pointerdown', (event) => {
 
     triggerHeld = true;
     fire();
+});
+
+// On a phone there is no R key, so the counter itself is the reload button.
+elAmmo.addEventListener('click', () => startReload());
+
+// The slider and the number box drive the same value; typing a number is
+// for anyone matching an exact csgo setting.
+function setSensitivity(value, source) {
+    const v = Number(value);
+    if (!Number.isFinite(v)) return;
+    sensitivity = clamp(v, SENS_MIN, SENS_MAX);
+    if (source !== elSensRange) elSensRange.value = String(sensitivity);
+    if (source !== elSensValue) elSensValue.value = String(sensitivity);
+    remember(SENS_KEY, String(sensitivity));
+}
+elSensRange.addEventListener('input', () => setSensitivity(elSensRange.value, elSensRange));
+elSensValue.addEventListener('change', () => setSensitivity(elSensValue.value));
+
+elSound.addEventListener('click', () => {
+    soundOn = !soundOn;
+    remember(SOUND_KEY, soundOn ? 'on' : 'off');
+    elSound.setAttribute('aria-pressed', String(soundOn));
+    elSound.textContent = soundOn ? 'sound on' : 'sound off';
 });
 
 // Right click is the scope, never the browser menu.
@@ -2929,9 +3404,10 @@ document.addEventListener('keydown', (event) => {
     }
     // Inspect, on the key every shooter puts it on. It does not stop the clock
     // and it does not stop a shot, so showing off costs you the seconds.
-    if ((event.key === 'f' || event.key === 'F') && running && !inspectStart && !event.repeat) {
+    if ((event.key === 'f' || event.key === 'F') && running && !inspectStart && !reloadStart && !event.repeat) {
         inspectStart = performance.now();
     }
+    if ((event.key === 'r' || event.key === 'R') && running && !event.repeat) startReload();
 });
 
 // Switching tabs stops requestAnimationFrame, so a round left in the
@@ -2953,6 +3429,10 @@ buildChips(elGuns, WEAPONS, weapon.id, (id) => {
     remember(GUN_KEY, id);
     updateHint();
 });
+setSensitivity(recall(SENS_KEY) ?? SENS_DEFAULT);
+soundOn = recall(SOUND_KEY) !== 'off';
+elSound.setAttribute('aria-pressed', String(soundOn));
+elSound.textContent = soundOn ? 'sound on' : 'sound off';
 xhStyle = (CROSSHAIRS.find((c) => c.id === recall(XH_KEY)) || CROSSHAIRS[0]).id;
 xhColor = XH_COLORS.find((c) => c.id === recall(XH_COLOR_KEY)) || XH_COLORS[0];
 buildChips(elCrosshairs, CROSSHAIRS, xhStyle, (id) => {

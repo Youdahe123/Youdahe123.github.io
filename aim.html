@@ -30,6 +30,13 @@
             <span class="aim-hud-cell"><b id="aimAcc">100%</b><i>accuracy</i></span>
         </div>
 
+        <!-- Ammo, bottom right like csgo. Tapping it reloads on a phone. -->
+        <div class="aim-ammo" id="aimAmmo" hidden>
+            <span class="aim-ammo-gun" id="aimAmmoGun">plasma rifle</span>
+            <span class="aim-ammo-count"><b id="aimAmmoMag">40</b><i>/ &infin;</i></span>
+            <span class="aim-ammo-bar" aria-hidden="true"><span id="aimAmmoFill"></span></span>
+        </div>
+
         <!-- Start, pause and results all share one menu: the game panel on the
              left, the photo and the leaderboard on the right. -->
         <div class="aim-menu" id="aimPanel">
@@ -59,6 +66,13 @@
                         <div class="aim-chips" id="aimMaps" role="radiogroup" aria-labelledby="aimMapLabel"></div>
                     </div>
                     <div class="aim-pick">
+                        <label class="aim-pick-label" for="aimSensRange">sensitivity</label>
+                        <div class="aim-sens">
+                            <input class="aim-sens-range" id="aimSensRange" type="range" min="0.2" max="8" step="0.05" value="2.5">
+                            <input class="aim-sens-value" id="aimSensValue" type="number" min="0.2" max="8" step="0.05" value="2.5" aria-label="sensitivity value">
+                        </div>
+                    </div>
+                    <div class="aim-pick">
                         <span class="aim-pick-label" id="aimXhLabel">crosshair</span>
                         <div class="aim-chips" id="aimCrosshairs" role="radiogroup" aria-labelledby="aimXhLabel"></div>
                         <div class="aim-swatches">
@@ -75,6 +89,7 @@
                     <button class="aim-btn aim-btn-go" id="aimStart" type="button" disabled>loading…</button>
                     <button class="aim-btn" id="aimSaveOpen" type="button" hidden>save score</button>
                     <button class="aim-btn" id="aimReset" type="button">reset score</button>
+                    <button class="aim-btn" id="aimSound" type="button" aria-pressed="true">sound on</button>
                 </div>
 
                 <!-- Shown after a round with at least one hit. -->

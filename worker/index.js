@@ -36,6 +36,24 @@ const PRIVATE_PAGES = new Set([
   '/notion-prep.html',
 ]);
 
+// The public site is also served from GitHub Pages, which has no server, so
+// the aim trainer there calls this Worker cross-origin for its leaderboard.
+// Only that route opens up, and only to the site's own origins.
+const CORS_ROUTES = new Set(['/api/aim']);
+const CORS_ORIGINS = new Set([
+  'https://youdahe123.github.io',
+  'https://youdahe.com',
+  'https://www.youdahe.com',
+  'http://localhost:8787',
+]);
+
+function withCors(response, origin) {
+  const headers = new Headers(response.headers);
+  headers.set('access-control-allow-origin', origin);
+  headers.set('vary', 'origin');
+  return new Response(response.body, { status: response.status, headers });
+}
+
 function normalize(pathname) {
   return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
 }
@@ -49,8 +67,24 @@ export default {
       const route = ROUTES[path];
       if (!route) return json({ error: 'not found' }, 404);
 
+      const origin = request.headers.get('origin');
+      const cors = CORS_ROUTES.has(path) && CORS_ORIGINS.has(origin) ? origin : null;
+      if (cors && request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'access-control-allow-origin': cors,
+            'access-control-allow-methods': 'GET, POST',
+            'access-control-allow-headers': 'content-type',
+            'access-control-max-age': '86400',
+            vary: 'origin',
+          },
+        });
+      }
+
       try {
-        return await route(request, env, ctx);
+        const response = await route(request, env, ctx);
+        return cors ? withCors(response, cors) : response;
       } catch (error) {
         console.error(`API error on ${path}:`, error);
         return json({ error: 'internal server error' }, 500);

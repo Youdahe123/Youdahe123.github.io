@@ -5205,6 +5205,33 @@ h1.post-full-title::before {
     transform: none;
 }
 
+.aim-sens {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+
+.aim-sens-range {
+    width: 12rem;
+    accent-color: var(--ink-fg);
+}
+
+.aim-sens-value {
+    width: 4.2rem;
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--ink-rule);
+    background: none;
+    font-family: var(--ink-font);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-fg);
+}
+
+.aim-sens-value:focus {
+    outline: none;
+    border-color: var(--ink-fg);
+}
+
 .aim-swatches {
     display: flex;
     align-items: center;
@@ -5230,6 +5257,69 @@ h1.post-full-title::before {
 .aim-swatch[aria-checked="true"] {
     border-color: var(--ink-fg);
     box-shadow: inset 0 0 0 2px var(--ink-bg), 0 0 0 1px var(--ink-fg);
+}
+
+.aim-ammo {
+    position: absolute;
+    right: 2.2rem;
+    bottom: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.2rem;
+    font-family: var(--ink-font);
+    color: var(--ink-fg);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+    cursor: pointer;
+    user-select: none;
+}
+
+.aim-ammo[hidden] {
+    display: none;
+}
+
+.aim-ammo-gun {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+}
+
+.aim-ammo-count b {
+    font-size: 40px;
+    font-weight: 600;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.aim-ammo-count i {
+    margin-left: 0.35rem;
+    font-size: 18px;
+    font-style: normal;
+    color: var(--ink-muted);
+}
+
+.aim-ammo.is-low .aim-ammo-count b {
+    color: #ff6b5a;
+}
+
+/* Only there while reloading: a thin bar that fills as it goes. */
+.aim-ammo-bar {
+    width: 96px;
+    height: 3px;
+    background: rgba(0, 0, 0, 0.35);
+    visibility: hidden;
+}
+
+.aim-ammo.is-reloading .aim-ammo-bar {
+    visibility: visible;
+}
+
+.aim-ammo-bar span {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: var(--ink-fg);
 }
 
 .aim-scope {
