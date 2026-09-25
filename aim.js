@@ -126,7 +126,7 @@ let deaths = 0;
 const botsMode = () => mode === 'bots';
 
 // Movement keys, held.
-const keys = { forward: false, back: false, left: false, right: false, jump: false, walk: false };
+const keys = { forward: false, back: false, left: false, right: false, jump: false, walk: false, crouch: false };
 const KEYMAP = {
     KeyW: 'forward', ArrowUp: 'forward',
     KeyS: 'back', ArrowDown: 'back',
@@ -134,6 +134,7 @@ const KEYMAP = {
     KeyD: 'right', ArrowRight: 'right',
     Space: 'jump',
     ShiftLeft: 'walk', ShiftRight: 'walk',
+    ControlLeft: 'crouch', ControlRight: 'crouch', KeyC: 'crouch',
 };
 function clearKeys() {
     for (const k of Object.keys(keys)) keys[k] = false;
@@ -5678,6 +5679,8 @@ function fire(ndc) {
     if (botsMode()) {
         const moving = clamp((bots.speed - 11) / 10, 0, 1) + (bots.airborne ? 1 : 0);
         if (moving > 0) aim = wander(moving * (weapon.scope ? 0.12 : weapon.pellets ? 0.01 : 0.035));
+        // Crouched and still, a spray stays tighter, the way it does in csgo.
+        if (bots.crouched && streak) aim.lerp(ndc || CENTRE, 0.35);
     }
     fireGun(aim);
 
@@ -6163,7 +6166,7 @@ function updateHint() {
             ? (akAuto ? 'hold to spray · g for single shot' : 'click to fire · g for full auto')
             : isAuto() ? 'hold to spray' : weapon.scope ? 'click to fire · right click to scope' : 'click to fire';
         if (botsMode()) {
-            elHint.textContent = `wasd to move · space to jump · shift to walk · ${fire}${reloadsOn ? ' · r to reload' : ''} · esc to pause`;
+            elHint.textContent = `wasd to move · space to jump · shift to walk · ctrl or c to crouch · ${fire}${reloadsOn ? ' · r to reload' : ''} · esc to pause`;
             return;
         }
         elHint.textContent = `${fire} · ${reloadsOn ? 'r to reload · ' : ''}f to inspect · esc to pause`;
@@ -6411,7 +6414,21 @@ function toggleFullscreen() {
 
 function syncFullscreen() {
     elFullscreen.textContent = fullscreenElement() ? 'exit fullscreen' : 'fullscreen';
+    // Outside fullscreen the browser keeps shortcuts like ctrl+w (close tab)
+    // for itself. In fullscreen, Chrome lets a page take the whole keyboard,
+    // so crouch-walking with ctrl+w moves you instead; holding esc still
+    // leaves fullscreen.
+    if (!navigator.keyboard) return;
+    if (fullscreenElement()) navigator.keyboard.lock?.().catch(() => {});
+    else navigator.keyboard.unlock?.();
 }
+
+// And if a tab close does slip through mid-round, the browser asks first.
+window.addEventListener('beforeunload', (event) => {
+    if (!running || !botsMode()) return;
+    event.preventDefault();
+    event.returnValue = '';
+});
 
 elFullscreen.hidden = !canFullscreen;
 elFullscreen.addEventListener('click', toggleFullscreen);

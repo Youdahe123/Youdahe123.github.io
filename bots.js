@@ -30,6 +30,9 @@ const NAMES = ['Albert', 'Brian', 'Crasswater', 'Moe', 'Rock', 'Vitaliy', 'Shark
 
 // Player movement, in map units and seconds.
 const EYE = 8;
+// Crouched (ctrl or c), as in csgo: lower, slower, silent, harder to hit.
+const EYE_CROUCH = 5.2;
+const CROUCH_SPEED = 7;
 const RADIUS = 1.2;
 const BOT_RADIUS = 1.1;
 const RUN = 21;
@@ -99,6 +102,7 @@ export function createBots(ctx) {
         killer: null,
         stepAt: 0,
         bob: 0,
+        eye: EYE,
     };
     const stats = { kills: 0, deaths: 0, headshots: 0 };
     const bots = [];
@@ -724,7 +728,7 @@ export function createBots(ctx) {
 
         const moving = Math.hypot(player.vel.x, player.vel.z) > WALK + 1;
         const firstShots = now - bot.spottedAt < difficulty.reaction + 250 ? 0.6 : 1;
-        const p = difficulty.accuracy * clamp(1.15 - dist / 120, 0.3, 1) * (moving ? 0.7 : 1) * (player.onGround ? 1 : 0.6) * firstShots;
+        const p = difficulty.accuracy * clamp(1.15 - dist / 120, 0.3, 1) * (moving ? 0.7 : 1) * (player.onGround ? 1 : 0.6) * (player.eye < EYE - 1 ? 0.8 : 1) * firstShots;
         aimAt.copy(camera.position);
         if (Math.random() < p) {
             const headshot = Math.random() < difficulty.headshot;
@@ -945,7 +949,7 @@ export function createBots(ctx) {
             .addScaledVector(forward, (keys.forward ? 1 : 0) - (keys.back ? 1 : 0))
             .addScaledVector(right, (keys.right ? 1 : 0) - (keys.left ? 1 : 0));
         if (wish.lengthSq() > 0) wish.normalize();
-        const top = keys.walk ? WALK : RUN;
+        const top = keys.crouch ? CROUCH_SPEED : keys.walk ? WALK : RUN;
 
         // Quick to get going and to stop on the ground, sluggish in the air.
         const grip = player.onGround ? 12 : 1.8;
@@ -959,11 +963,15 @@ export function createBots(ctx) {
         player.vel.y -= GRAVITY * dt;
 
         const pos = camera.position;
+        // Crouching lowers the eye with the feet where they are.
+        const eyeWas = player.eye;
+        player.eye += ((keys.crouch ? EYE_CROUCH : EYE) - player.eye) * Math.min(1, dt * 14);
+        pos.y += player.eye - eyeWas;
         pos.x += player.vel.x * dt;
         pos.z += player.vel.z * dt;
         pos.y += player.vel.y * dt;
 
-        const feet = pos.y - EYE;
+        const feet = pos.y - player.eye;
         const ground = collide(pos, player.vel, RADIUS, feet);
         // Bots are solid too.
         for (const bot of bots) {
@@ -977,11 +985,11 @@ export function createBots(ctx) {
                 pos.z += (dz / d) * (min - d);
             }
         }
-        if (pos.y - EYE <= ground) {
-            pos.y = ground + EYE;
+        if (pos.y - player.eye <= ground) {
+            pos.y = ground + player.eye;
             player.vel.y = 0;
             player.onGround = true;
-        } else if (pos.y - EYE > ground + 0.05) {
+        } else if (pos.y - player.eye > ground + 0.05) {
             player.onGround = false;
         }
 
@@ -998,6 +1006,7 @@ export function createBots(ctx) {
     function respawnPlayer() {
         const spot = spawnPoint(bots.filter((b) => b.alive).map((b) => b.pos));
         camera.position.set(spot.x, floorY + EYE, spot.z);
+        player.eye = EYE;
         camera.rotation.z = 0;
         player.vel.set(0, 0, 0);
         player.health = 100;
@@ -1129,6 +1138,7 @@ export function createBots(ctx) {
         const names = [...NAMES].sort(() => Math.random() - 0.5);
         const spot = spawnPoint([]);
         camera.position.set(spot.x, floorY + EYE, spot.z);
+        player.eye = EYE;
         for (let i = 0; i < botCount; i++) {
             const bot = makeBot(names[i % names.length]);
             bots.push(bot);
@@ -1185,6 +1195,9 @@ export function createBots(ctx) {
         },
         get speed() {
             return Math.hypot(player.vel.x, player.vel.z);
+        },
+        get crouched() {
+            return player.eye < EYE - 1;
         },
         get airborne() {
             return !player.onGround;
