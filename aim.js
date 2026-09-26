@@ -85,6 +85,8 @@ const elBoardEmpty = document.getElementById('aimBoardEmpty');
 const elGuns = document.getElementById('aimGuns');
 const elLook = document.getElementById('aimLook');
 const elModeNote = document.getElementById('aimModeNote');
+const elPreview = document.getElementById('aimPreview');
+const elPreviewCanvas = document.getElementById('aimPreviewCanvas');
 const elDemoTag = document.getElementById('aimDemoTag');
 const elTargets = document.getElementById('aimTargets');
 const elMaps = document.getElementById('aimMaps');
@@ -4067,6 +4069,14 @@ let showcaseSubject = 'gun';
 let lookRig = null;
 let look = DEFAULT_LOOK;
 let lookTwirlAt = 0;
+// Dragging the showcase turns it by hand, and a flick keeps it spinning a
+// moment after letting go.
+const spin = { yaw: 0, pitch: 0, vel: 0, drag: null };
+// Phones have no open middle in the menu, so the showcase turns in a box of
+// its own there, drawn by a second small renderer.
+let inline = false;
+let previewRenderer = null;
+let previewCamera = null;
 
 // The middle of the gap between the panel and the board, in screen units, read
 // off the layout so the gun stays centred in it at any window size.
@@ -5457,11 +5467,12 @@ function updateGun(now, dt) {
         // the board: a slow loop round a small circle, turning as it goes so
         // every side of it gets shown.
         const t = now / 1000;
-        const d = weapon.showcase;
+        // Closer in the phone box, which is only a slice of the screen.
+        const d = weapon.showcase * (inline ? 0.62 : 1);
         const half = Math.tan((viewCamera.fov * Math.PI) / 360) * d;
         const cx = showcaseX * half * viewCamera.aspect;
         gun.position.set(cx + Math.cos(t * 0.9) * d * 0.08, Math.sin(t * 0.9) * d * 0.06, -d);
-        gun.rotation.set(0.14 + Math.sin(t * 0.9) * 0.1, t * 0.7, Math.cos(t * 0.9) * 0.12);
+        gun.rotation.set(0.14 + Math.sin(t * 0.9) * 0.1 + spin.pitch, t * 0.7 + spin.yaw, Math.cos(t * 0.9) * 0.12);
         showcaseLight.position.set(cx - d * 0.3, d * 0.45, -d * 0.4);
         showcaseGlow.position.set(cx, 0, -d - 0.4);
         showcaseGlow.scale.setScalar(d * 1.1);
@@ -5643,8 +5654,15 @@ function fireGun(ndc) {
 // The menu preview. Only on a wide screen: when the menu stacks into one
 // column there is no gap to float in, and the gun would sit under the text.
 function setShowcase(on) {
-    showcase = on && window.innerWidth > 900;
-    if (showcase) measureShowcase();
+    showcase = on;
+    inline = on && window.innerWidth <= 900;
+    elPreview.hidden = !inline;
+    if (inline) {
+        showcaseX = 0;
+        sizePreview();
+    } else if (showcase) {
+        measureShowcase();
+    }
     if (gun) gun.visible = showcase && showcaseSubject === 'gun';
     if (lookRig) lookRig.body.visible = showcase && showcaseSubject === 'character';
     applyShowcaseLights();
@@ -5660,6 +5678,8 @@ function applyShowcaseLights() {
 function showGun(visible) {
     if (!gun) return;
     showcase = false;
+    inline = false;
+    elPreview.hidden = true;
     if (lookRig) lookRig.body.visible = false;
     applyShowcaseLights();
     gun.visible = visible;
@@ -5687,6 +5707,7 @@ function resize() {
     camera.updateProjectionMatrix();
     viewCamera.aspect = w / h;
     viewCamera.updateProjectionMatrix();
+    if (previewRenderer) sizePreview();
     render();
 }
 
@@ -5694,12 +5715,66 @@ function render() {
     if (!renderer) return;
     renderer.clear();
     renderer.render(scene, camera);
-    if (((gun && gun.visible) || lookRig?.body.visible) && !scoped) {
+    const viewShown = (gun && gun.visible) || lookRig?.body.visible;
+    if (viewShown && inline && previewRenderer) {
+        previewRenderer.render(viewScene, previewCamera);
+    } else if (viewShown && !scoped) {
         // Fresh depth for the viewmodel pass, so the rifle is always in front
         // of the arena no matter how close a target has spawned.
         renderer.clearDepth();
         renderer.render(viewScene, viewCamera);
     }
+}
+
+function sizePreview() {
+    if (!previewRenderer) {
+        previewRenderer = new THREE.WebGLRenderer({ canvas: elPreviewCanvas, antialias: true, alpha: true });
+        previewRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        previewCamera = new THREE.PerspectiveCamera(40, 1, 0.01, 40);
+    }
+    const w = elPreviewCanvas.clientWidth;
+    const h = elPreviewCanvas.clientHeight;
+    if (!w || !h) return;
+    previewRenderer.setSize(w, h, false);
+    previewCamera.aspect = w / h;
+    previewCamera.updateProjectionMatrix();
+}
+
+/* ---------- spinning the showcase by hand ---------- */
+
+function startSpin(event) {
+    spin.drag = { id: event.pointerId, x: event.clientX, y: event.clientY, t: performance.now() };
+    spin.vel = 0;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    event.currentTarget.classList.add('is-spinning');
+}
+
+function moveSpin(event) {
+    const d = spin.drag;
+    if (!d || event.pointerId !== d.id) return;
+    const now = performance.now();
+    const turn = (event.clientX - d.x) * 0.012;
+    spin.yaw += turn;
+    spin.pitch = clamp(spin.pitch + (event.clientY - d.y) * 0.006, -0.5, 0.5);
+    spin.vel = turn / Math.max(0.008, (now - d.t) / 1000);
+    d.x = event.clientX;
+    d.y = event.clientY;
+    d.t = now;
+}
+
+function endSpin(event) {
+    if (!spin.drag || event.pointerId !== spin.drag.id) return;
+    // A drag that stopped before letting go does not fling.
+    if (performance.now() - spin.drag.t > 80) spin.vel = 0;
+    spin.drag = null;
+    event.currentTarget.classList.remove('is-spinning');
+}
+
+function updateSpin(dt) {
+    if (spin.drag) return;
+    spin.yaw += spin.vel * dt;
+    spin.vel *= Math.exp(-dt * 2.5);
+    spin.pitch *= Math.exp(-dt * 3);
 }
 
 /* ---------- aiming ---------- */
@@ -6224,7 +6299,8 @@ function startDemo() {
     demo.spotted = [];
     for (const k in demo.keys) demo.keys[k] = false;
     stage.classList.add('is-demo');
-    crosshair.hidden = false;
+    // On a phone the menu covers the middle of the screen.
+    crosshair.hidden = window.innerWidth <= 900;
     elDemoTag.hidden = false;
     if (demo.kind === 'bots') {
         targetGroup.visible = false;
@@ -6369,6 +6445,7 @@ function loop(now) {
     // The sky stays centred on the viewer, so walking to the edge of a big map
     // never reaches it.
     if (skyMesh) skyMesh.position.copy(camera.position);
+    updateSpin(dt);
     updateGun(now, dt);
     updateLookPreview(now);
 
@@ -6532,7 +6609,7 @@ function updateLookPreview(now) {
     const cx = showcaseX * half * viewCamera.aspect;
     lookRig.body.position.set(cx, -0.66 + Math.sin(t * 0.9) * 0.03, -d);
     const twirl = easeInOut(clamp((now - lookTwirlAt) / 900, 0, 1)) * Math.PI * 2;
-    lookRig.body.rotation.set(0.06, Math.sin(t * 0.45) * 0.8 + twirl, 0);
+    lookRig.body.rotation.set(0.06 + spin.pitch * 0.5, Math.sin(t * 0.45) * 0.8 + twirl + spin.yaw, 0);
     lookRig.spine.rotation.x = Math.sin(t * 1.6) * 0.02;
     lookRig.neck.rotation.y = Math.sin(t * 0.7) * 0.25;
     showcaseLight.position.set(cx - d * 0.3, d * 0.45, -d * 0.4);
@@ -6839,11 +6916,66 @@ let lastTouchAt = -Infinity;
 canvas.addEventListener('mousedown', (event) => {
     if (performance.now() - lastTouchAt > 800) onPress(event);
 });
+// Phones: drag to look around, tap to shoot. A tap on a target (or on the
+// gun, to inspect it) goes off at once; one on nothing waits to see whether
+// it turns into a drag, and is a missed shot if it does not.
+const touchAim = { id: null, x: 0, y: 0, sx: 0, sy: 0, moved: false, fired: false };
+
+function ndcOf(event) {
+    const box = canvas.getBoundingClientRect();
+    return new THREE.Vector2(
+        ((event.clientX - box.left) / box.width) * 2 - 1,
+        -((event.clientY - box.top) / box.height) * 2 + 1
+    );
+}
+
+function tapHitsTarget(ndc) {
+    if (!targetGroup.visible) return false;
+    raycaster.setFromCamera(ndc, camera);
+    return raycaster.intersectObjects(targetGroup.children, true).length > 0;
+}
+
 canvas.addEventListener('pointerdown', (event) => {
     if (event.pointerType === 'mouse') return;
     lastTouchAt = performance.now();
-    onPress(event);
+    if (!running || touchAim.id !== null) return;
+    Object.assign(touchAim, { id: event.pointerId, x: event.clientX, y: event.clientY, sx: event.clientX, sy: event.clientY, moved: false });
+    const ndc = ndcOf(event);
+    touchAim.fired = tappedGun(ndc) || tapHitsTarget(ndc);
+    if (touchAim.fired) onPress(event);
+    canvas.setPointerCapture?.(event.pointerId);
 });
+canvas.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== touchAim.id) return;
+    if (!touchAim.moved && Math.hypot(event.clientX - touchAim.sx, event.clientY - touchAim.sy) > 10) touchAim.moved = true;
+    if (touchAim.moved && running) {
+        // About one screen height of drag turns the view one field of view.
+        const k = (camera.fov * Math.PI) / 180 / stage.clientHeight;
+        yaw -= (event.clientX - touchAim.x) * k;
+        pitch = clamp(pitch - (event.clientY - touchAim.y) * k, -PITCH_LIMIT, PITCH_LIMIT);
+        applyLook();
+    }
+    touchAim.x = event.clientX;
+    touchAim.y = event.clientY;
+});
+const endTouchAim = (event) => {
+    if (event.pointerId !== touchAim.id) return;
+    if (event.type === 'pointerup' && !touchAim.moved && !touchAim.fired) onPress(event);
+    touchAim.id = null;
+};
+canvas.addEventListener('pointerup', endTouchAim);
+canvas.addEventListener('pointercancel', endTouchAim);
+
+// The menu showcase: drag the open middle (or the box on a phone) to spin it.
+panel.addEventListener('pointerdown', (event) => {
+    if (event.target === panel && showcase && !inline) startSpin(event);
+});
+elPreviewCanvas.addEventListener('pointerdown', startSpin);
+for (const el of [panel, elPreviewCanvas]) {
+    el.addEventListener('pointermove', moveSpin);
+    el.addEventListener('pointerup', endSpin);
+    el.addEventListener('pointercancel', endSpin);
+}
 
 // WASD and friends, only while a bots round is on. Space would otherwise
 // scroll the page.

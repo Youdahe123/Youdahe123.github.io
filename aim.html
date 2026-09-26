@@ -94,6 +94,11 @@
                             <div class="aim-chips" id="aimBotCount" role="radiogroup" aria-label="number of bots"></div>
                         </div>
                     </div>
+                    <!-- Phones: no open middle in the menu, so the gun or your character turns in this box. -->
+                    <div class="aim-preview" id="aimPreview" hidden>
+                        <canvas id="aimPreviewCanvas" aria-label="preview, drag to spin"></canvas>
+                        <span class="aim-preview-hint" aria-hidden="true">drag to spin</span>
+                    </div>
                     <div class="aim-pick" id="aimGunRow">
                         <span class="aim-pick-label" id="aimGunLabel">gun</span>
                         <div class="aim-chips" id="aimGuns" role="radiogroup" aria-labelledby="aimGunLabel"></div>
