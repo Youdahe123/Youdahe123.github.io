@@ -39,6 +39,21 @@
         <div class="aim-damage" id="aimDamage" aria-hidden="true"></div>
         <p class="aim-death" id="aimDeath" hidden></p>
 
+        <!-- End of a bots round: the best kills replayed, letterboxed. -->
+        <div class="aim-killcam" id="aimKillcam" hidden>
+            <div class="kc-bar kc-top">
+                <span class="kc-tag"><span class="kc-dot" aria-hidden="true"></span><b id="aimKcTitle">killcam</b></span>
+                <span class="kc-count" id="aimKcCount">1 / 1</span>
+            </div>
+            <div class="kc-bar kc-bottom">
+                <span class="kc-line" id="aimKcLine"></span>
+                <span class="kc-skip">
+                    <button type="button" id="aimKcSkip">next <kbd>space</kbd></button>
+                    <button type="button" id="aimKcSkipAll">skip all <kbd>esc</kbd></button>
+                </span>
+            </div>
+        </div>
+
         <!-- Ammo, bottom right like csgo. Tapping it reloads on a phone. -->
         <div class="aim-ammo" id="aimAmmo" hidden>
             <span class="aim-ammo-gun" id="aimAmmoGun">plasma rifle</span>
@@ -75,9 +90,18 @@
                             <div class="aim-chips" id="aimBotCount" role="radiogroup" aria-label="number of bots"></div>
                         </div>
                     </div>
-                    <div class="aim-pick">
+                    <div class="aim-pick" id="aimGunRow">
                         <span class="aim-pick-label" id="aimGunLabel">gun</span>
                         <div class="aim-chips" id="aimGuns" role="radiogroup" aria-labelledby="aimGunLabel"></div>
+                    </div>
+                    <!-- You, as the bots killcam shows you. Turns where the gun floats while you dress it. -->
+                    <div class="aim-pick" id="aimLookRow">
+                        <span class="aim-pick-label">character</span>
+                        <div class="aim-look" id="aimLook"></div>
+                        <div class="aim-look-actions">
+                            <button class="aim-chip" id="aimLookRandom" type="button">randomize</button>
+                            <button class="aim-chip" id="aimLookReset" type="button">reset</button>
+                        </div>
                     </div>
                     <div class="aim-pick">
                         <span class="aim-pick-label" id="aimReloadLabel">reloading</span>

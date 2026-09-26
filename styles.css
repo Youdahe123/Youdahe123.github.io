@@ -5342,6 +5342,31 @@ h1.post-full-title::before {
     display: none;
 }
 
+/* The character picker: a small label beside each row of chips or swatches. */
+.aim-look {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    align-items: center;
+    gap: 0.45rem 0.9rem;
+}
+
+.aim-look-label {
+    font-size: 12px;
+    color: var(--ink-muted);
+}
+
+.aim-look .aim-chip,
+.aim-look-actions .aim-chip {
+    padding: 0.22rem 0.6rem;
+    font-size: 12px;
+}
+
+.aim-look-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.6rem;
+}
+
 /* ---- bots mode HUD ---- */
 
 .aim-health {
@@ -5458,6 +5483,122 @@ h1.post-full-title::before {
 
 .aim-death[hidden] {
     display: none;
+}
+
+.is-killcam .aim-killfeed {
+    top: calc(11vh + 1rem);
+}
+
+/* The end-of-round killcam: letterbox bars, a red rec dot, and who went down. */
+.aim-killcam {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+    font-family: var(--ink-font);
+    color: #f0e9dd;
+}
+
+.aim-killcam[hidden] {
+    display: none;
+}
+
+.kc-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    min-height: 11vh;
+    padding: 0 1.6rem;
+    background: #000;
+    transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.kc-top {
+    transform: translateY(-100%);
+}
+
+.kc-bottom {
+    transform: translateY(100%);
+}
+
+.aim-killcam.is-in .kc-bar {
+    transform: none;
+}
+
+.kc-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 15px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.kc-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #d9372b;
+    animation: kc-blink 1s steps(2, start) infinite;
+}
+
+@keyframes kc-blink {
+    to {
+        visibility: hidden;
+    }
+}
+
+.kc-count {
+    font-size: 13px;
+    color: rgba(240, 233, 221, 0.6);
+}
+
+.kc-line {
+    font-size: 14px;
+    color: #e6b84f;
+}
+
+.kc-skip {
+    display: flex;
+    gap: 0.5rem;
+    pointer-events: auto;
+}
+
+.kc-skip button {
+    font: inherit;
+    font-size: 12px;
+    color: #f0e9dd;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 0.35rem 0.7rem;
+    cursor: pointer;
+}
+
+.kc-skip button:hover {
+    background: rgba(255, 255, 255, 0.16);
+}
+
+.kc-skip kbd {
+    font: inherit;
+    font-size: 10px;
+    opacity: 0.6;
+    margin-left: 0.3rem;
+}
+
+@media (max-width: 640px) {
+    .kc-bar {
+        padding: 0 1rem;
+    }
+
+    .kc-bottom {
+        flex-direction: column;
+        justify-content: center;
+        gap: 0.4rem;
+    }
 }
 
 .aim-scope {

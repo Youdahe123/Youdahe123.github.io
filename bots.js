@@ -6,6 +6,7 @@
 // Scale: the maps put the eye 8 units over the floor, so a person here is
 // about 9 units tall and everything below is built to that.
 import * as THREE from './vendor/three/three.module.min.js';
+import { buildSoldier, aimPose, disposeSoldier } from './soldier.js';
 
 export const DIFFICULTIES = [
     { id: 'easy', label: 'easy', reaction: 950, accuracy: 0.14, fireGap: 380, speed: 9, turn: 2.2, headshot: 0.03 },
@@ -225,122 +226,8 @@ export function createBots(ctx) {
 
     /* ---------- the bots ---------- */
 
-    const MAT = {
-        jacket: new THREE.MeshStandardMaterial({ color: 0x5b5146, roughness: 0.9 }),
-        pants: new THREE.MeshStandardMaterial({ color: 0x3a3833, roughness: 0.95 }),
-        boots: new THREE.MeshStandardMaterial({ color: 0x1c1b19, roughness: 0.8 }),
-        vest: new THREE.MeshStandardMaterial({ color: 0x5e5e3c, roughness: 0.9 }),
-        mask: new THREE.MeshStandardMaterial({ color: 0x262626, roughness: 0.9 }),
-        skin: new THREE.MeshStandardMaterial({ color: 0xc69474, roughness: 0.8 }),
-        gloves: new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.8 }),
-        metal: new THREE.MeshStandardMaterial({ color: 0x2a2b2c, roughness: 0.5, metalness: 0.5 }),
-        wood: new THREE.MeshStandardMaterial({ color: 0x7a4a22, roughness: 0.7 }),
-    };
-
-    function piece(parent, material, size, position, part, rotation) {
-        const mesh = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), material);
-        mesh.position.set(position[0], position[1], position[2]);
-        if (rotation) mesh.rotation.set(rotation[0], rotation[1], rotation[2]);
-        mesh.userData.part = part;
-        parent.add(mesh);
-        return mesh;
-    }
-
-    // A masked soldier with an AK, in the csgo terrorist palette: jacket, plate
-    // carrier, balaclava. Jointed at the hips, knees, shoulders, elbows and
-    // neck so it can walk and fall. Faces +Z.
-    function buildBot() {
-        const body = new THREE.Group();
-        const hips = new THREE.Group();
-        hips.position.y = 4.4;
-        body.add(hips);
-
-        const legs = [];
-        for (const side of [-1, 1]) {
-            const thigh = new THREE.Group();
-            thigh.position.set(side * 0.45, 0, 0);
-            piece(thigh, MAT.pants, [0.72, 2.3, 0.8], [0, -1.1, 0], 'legs');
-            const knee = new THREE.Group();
-            knee.position.y = -2.2;
-            piece(knee, MAT.pants, [0.66, 2.1, 0.72], [0, -1.05, 0], 'legs');
-            piece(knee, MAT.boots, [0.72, 0.45, 1.05], [0, -2.0, 0.15], 'legs');
-            thigh.add(knee);
-            hips.add(thigh);
-            legs.push({ thigh, knee });
-        }
-
-        const spine = new THREE.Group();
-        hips.add(spine);
-        piece(spine, MAT.pants, [1.6, 0.8, 0.9], [0, 0.2, 0], 'body');
-        piece(spine, MAT.jacket, [1.8, 2.6, 1.0], [0, 1.8, 0], 'body');
-        piece(spine, MAT.vest, [1.9, 1.7, 1.12], [0, 2.0, 0.02], 'body');
-        for (const x of [-0.55, 0, 0.55]) piece(spine, MAT.vest, [0.45, 0.5, 0.25], [x, 1.55, 0.65], 'body');
-
-        const neck = new THREE.Group();
-        neck.position.y = 3.1;
-        spine.add(neck);
-        piece(neck, MAT.skin, [0.5, 0.4, 0.5], [0, 0.2, 0], 'head');
-        piece(neck, MAT.mask, [1.0, 1.15, 1.05], [0, 0.85, 0], 'head');
-        piece(neck, MAT.skin, [1.02, 0.26, 0.2], [0, 0.95, 0.45], 'head');
-        for (const x of [-0.22, 0.22]) piece(neck, MAT.mask, [0.14, 0.1, 0.05], [x, 0.95, 0.56], 'head');
-        piece(neck, MAT.mask, [1.06, 0.32, 1.1], [0, 1.45, 0], 'head');
-
-        const arms = [];
-        for (const side of [-1, 1]) {
-            const shoulder = new THREE.Group();
-            shoulder.position.set(side * 1.12, 2.85, 0);
-            piece(shoulder, MAT.jacket, [0.58, 1.6, 0.62], [0, -0.75, 0], 'body');
-            const elbow = new THREE.Group();
-            elbow.position.y = -1.5;
-            piece(elbow, MAT.jacket, [0.52, 1.45, 0.56], [0, -0.7, 0], 'body');
-            piece(elbow, MAT.gloves, [0.5, 0.45, 0.55], [0, -1.5, 0], 'body');
-            shoulder.add(elbow);
-            spine.add(shoulder);
-            arms.push({ shoulder, elbow, side });
-        }
-
-        // The rifle, held across the chest.
-        const gun = new THREE.Group();
-        gun.position.set(0.35, 2.05, 1.25);
-        piece(gun, MAT.metal, [0.28, 0.42, 2.6], [0, 0, 0.3], 'gun');
-        piece(gun, MAT.wood, [0.32, 0.36, 0.9], [0, -0.05, 1.1], 'gun');
-        piece(gun, MAT.wood, [0.26, 0.5, 1.0], [0, -0.1, -1.4], 'gun');
-        piece(gun, MAT.metal, [0.22, 0.8, 0.35], [0, -0.55, 0.45], 'gun', [0.3, 0, 0]);
-        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.1, 8), MAT.metal);
-        barrel.rotation.x = Math.PI / 2;
-        barrel.position.z = 2.1;
-        gun.add(barrel);
-        const muzzle = new THREE.Object3D();
-        muzzle.position.z = 2.7;
-        gun.add(muzzle);
-        spine.add(gun);
-
-        const hitMeshes = [];
-        body.traverse((o) => {
-            if (o.isMesh && o.userData.part && o.userData.part !== 'gun') hitMeshes.push(o);
-        });
-
-        return { body, hips, spine, neck, legs, arms, gun, muzzle, hitMeshes };
-    }
-
-    // Arms up on the rifle: the rest pose while alive.
-    function aimPose(bot) {
-        const [left, right] = bot.rig.arms;
-        left.shoulder.rotation.set(-1.35, 0.45, 0);
-        left.elbow.rotation.set(-0.35, 0, 0);
-        right.shoulder.rotation.set(-1.05, -0.2, 0);
-        right.elbow.rotation.set(-0.7, 0, 0);
-        bot.rig.neck.rotation.set(0, 0, 0);
-        bot.rig.spine.rotation.set(0, 0, 0);
-        bot.rig.hips.position.y = 4.4;
-        for (const leg of bot.rig.legs) {
-            leg.thigh.rotation.set(0, 0, 0);
-            leg.knee.rotation.set(0, 0, 0);
-        }
-    }
-
     function makeBot(name) {
-        const rig = buildBot();
+        const rig = buildSoldier();
         root.add(rig.body);
         const bot = {
             name,
@@ -370,7 +257,7 @@ export function createBots(ctx) {
             fall: null,
             stepAt: 0,
         };
-        aimPose(bot);
+        aimPose(bot.rig);
         return bot;
     }
 
@@ -391,7 +278,7 @@ export function createBots(ctx) {
         if (bot.rig.gun.parent !== bot.rig.spine) bot.rig.spine.add(bot.rig.gun);
         bot.rig.gun.position.set(0.35, 2.05, 1.25);
         bot.rig.gun.rotation.set(0, 0, 0);
-        aimPose(bot);
+        aimPose(bot.rig);
         bot.rig.body.rotation.y = bot.heading;
     }
 
@@ -411,6 +298,7 @@ export function createBots(ctx) {
     let particleCursor = 0;
 
     function spray(at, dir, count, speed, material, spread = 0.9, life = 0.6) {
+        rec({ type: 'spray', at: at.clone(), dir: dir.clone(), count, speed, material, spread, life });
         for (let i = 0; i < count; i++) {
             const p = particles[particleCursor++ % PARTICLES];
             p.mesh.material = material;
@@ -433,6 +321,7 @@ export function createBots(ctx) {
         mists.push({ sprite, born: 0, size: 1 });
     }
     function mist(at, size) {
+        rec({ type: 'mist', at: at.clone(), size });
         const m = mists.find((x) => !x.born) || mists[0];
         m.sprite.position.copy(at);
         m.sprite.visible = true;
@@ -522,6 +411,7 @@ export function createBots(ctx) {
         tracers.push({ line, born: 0 });
     }
     function tracer(from, to) {
+        rec({ type: 'tracer', from: from.clone(), to: to.clone() });
         const t = tracers.find((x) => !x.born) || tracers[0];
         const p = t.line.geometry.attributes.position;
         p.setXYZ(0, from.x, from.y, from.z);
@@ -540,6 +430,7 @@ export function createBots(ctx) {
         flashes.push({ sprite, born: 0 });
     }
     function muzzleFlash(at) {
+        rec({ type: 'flash', at: at.clone() });
         const f = flashes.find((x) => !x.born) || flashes[0];
         f.sprite.position.copy(at);
         f.sprite.visible = true;
@@ -558,10 +449,14 @@ export function createBots(ctx) {
         sound.burst({ cutoff: 700, decay: 0.07, volume: 0.16 * loud * near(dist, 70) });
     }
     const dink = () => {
+        rec({ type: 'dink' });
         sound.tone({ from: 2700, to: 2150, decay: 0.2, volume: 0.22, type: 'triangle' });
         sound.burst({ cutoff: 7000, type: 'highpass', decay: 0.05, volume: 0.18 });
     };
-    const thud = (dist) => sound.tone({ at: 0.45, from: 95, to: 38, decay: 0.2, volume: 0.35 * near(dist, 90) });
+    const thud = (dist) => {
+        rec({ type: 'thud' });
+        sound.tone({ at: 0.45, from: 95, to: 38, decay: 0.2, volume: 0.35 * near(dist, 90) });
+    };
     const hurt = () => {
         sound.tone({ from: 190, to: 80, decay: 0.12, volume: 0.35 });
         sound.burst({ cutoff: 900, decay: 0.08, volume: 0.25 });
@@ -665,6 +560,7 @@ export function createBots(ctx) {
         splatter(point, dir);
         thud(point.distanceTo(camera.position));
         feed('you', weaponLabel, bot.name, headshot, true);
+        markKill(bot, point, headshot, weaponLabel);
         ctx.onKill?.({ headshot, name: bot.name });
     }
 
@@ -688,6 +584,7 @@ export function createBots(ctx) {
             const hit = shotRay.intersectObjects(bot.rig.hitMeshes, false)[0];
             if (hit && (!best || hit.distance < best.hit.distance)) best = { bot, hit };
         }
+        if (!opts.melee) recShot(weaponId, best && (!wall || best.hit.distance < wall.distance) ? best.hit.point : wall ? wall.point : ray.at(reach, new THREE.Vector3()));
         if (best && (!wall || best.hit.distance < wall.distance)) {
             const { bot, hit } = best;
             const part = hit.object.userData.part;
@@ -733,6 +630,7 @@ export function createBots(ctx) {
         bot.rig.muzzle.getWorldPosition(muzzleWorld);
         muzzleFlash(muzzleWorld);
         botShotSound(dist);
+        rec({ type: 'botshot', at: muzzleWorld.clone() });
 
         const moving = Math.hypot(player.vel.x, player.vel.z) > WALK + 1;
         const firstShots = now - bot.spottedAt < difficulty.reaction + 250 ? 0.6 : 1;
@@ -1061,6 +959,11 @@ export function createBots(ctx) {
             }
         }
 
+        updateEffects(now, dt);
+        sample(now, input);
+    }
+
+    function updateEffects(now, dt) {
         for (const p of particles) {
             if (!p.born) continue;
             const age = (now - p.born) / 1000;
@@ -1109,9 +1012,391 @@ export function createBots(ctx) {
         el.damage.style.opacity = String(vignette);
     }
 
+    /* ---------- the killcam: recording the round, replaying the best of it ---------- */
+
+    // While a round is on, every bot's pose and where you stood are sampled
+    // into a rolling couple of seconds, along with the shots, blood and sounds.
+    // Each kill of yours keeps that window and what follows it, and at the end
+    // of the round the best of them play back from beside the bot that went
+    // down. Kills close together share one clip.
+    const PRE_MS = 2000;
+    const POST_MS = 1700;
+    const SAMPLE_MS = 25;
+    const BOT_F = 34;
+    const PLAYER_F = 9;
+    let frames = [];
+    let events = [];
+    let clips = [];
+    let open = null;
+    let lastSample = 0;
+    let replay = null;
+
+    // You, as the killcam sees you, dressed as picked on the menu.
+    let avatar = null;
+    function setLook(look) {
+        if (avatar) {
+            root.remove(avatar.body);
+            disposeSoldier(avatar);
+        }
+        avatar = buildSoldier(look);
+        aimPose(avatar);
+        avatar.body.visible = false;
+        root.add(avatar.body);
+    }
+    setLook(ctx.look);
+
+    function resetReel() {
+        frames = [];
+        events = [];
+        clips = [];
+        open = null;
+        lastSample = 0;
+        replay = null;
+        avatar.body.visible = false;
+    }
+
+    function rec(ev) {
+        if (!active || replay) return;
+        ev.t = performance.now();
+        events.push(ev);
+        if (open) open.events.push(ev);
+    }
+
+    // Your shot, drawn from the gun of your stand-in on the way back. One
+    // sound per trigger pull, however many pellets it threw.
+    function recShot(weaponId, end) {
+        const last = events[events.length - 1];
+        if (!(last && last.type === 'pshot' && performance.now() - last.t < 1)) rec({ type: 'pshot', weapon: weaponId });
+        rec({ type: 'ptracer', to: end.clone() });
+    }
+
+    function writePose(rig, a, o) {
+        const { body, spine, neck, gun } = rig;
+        a[o] = body.position.x;
+        a[o + 1] = body.position.y;
+        a[o + 2] = body.position.z;
+        a[o + 3] = body.quaternion.x;
+        a[o + 4] = body.quaternion.y;
+        a[o + 5] = body.quaternion.z;
+        a[o + 6] = body.quaternion.w;
+        a[o + 7] = body.visible ? 1 : 0;
+        a[o + 8] = rig.hips.position.y;
+        a[o + 9] = spine.rotation.x;
+        a[o + 10] = spine.rotation.y;
+        a[o + 11] = spine.rotation.z;
+        a[o + 12] = neck.rotation.x;
+        a[o + 13] = neck.rotation.y;
+        a[o + 14] = neck.rotation.z;
+        rig.legs.forEach((leg, j) => {
+            a[o + 15 + j * 2] = leg.thigh.rotation.x;
+            a[o + 16 + j * 2] = leg.knee.rotation.x;
+        });
+        rig.arms.forEach((arm, j) => {
+            const k = o + 19 + j * 4;
+            a[k] = arm.shoulder.rotation.x;
+            a[k + 1] = arm.shoulder.rotation.y;
+            a[k + 2] = arm.shoulder.rotation.z;
+            a[k + 3] = arm.elbow.rotation.x;
+        });
+        a[o + 27] = gun.parent === spine ? 0 : 1;
+        a[o + 28] = gun.position.x;
+        a[o + 29] = gun.position.y;
+        a[o + 30] = gun.position.z;
+        a[o + 31] = gun.rotation.x;
+        a[o + 32] = gun.rotation.y;
+        a[o + 33] = gun.rotation.z;
+    }
+
+    const qa = new THREE.Quaternion();
+    const qb = new THREE.Quaternion();
+    function readPose(rig, A, B, o, k) {
+        const L = (i) => A[o + i] + (B[o + i] - A[o + i]) * k;
+        rig.body.position.set(L(0), L(1), L(2));
+        qa.set(A[o + 3], A[o + 4], A[o + 5], A[o + 6]);
+        qb.set(B[o + 3], B[o + 4], B[o + 5], B[o + 6]);
+        rig.body.quaternion.slerpQuaternions(qa, qb, k);
+        rig.body.visible = A[o + 7] > 0.5;
+        rig.hips.position.y = L(8);
+        rig.spine.rotation.set(L(9), L(10), L(11));
+        rig.neck.rotation.set(L(12), L(13), L(14));
+        rig.legs.forEach((leg, j) => {
+            leg.thigh.rotation.x = L(15 + j * 2);
+            leg.knee.rotation.x = L(16 + j * 2);
+        });
+        rig.arms.forEach((arm, j) => {
+            const i = 19 + j * 4;
+            arm.shoulder.rotation.set(L(i), L(i + 1), L(i + 2));
+            arm.elbow.rotation.x = L(i + 3);
+        });
+        const dropped = A[o + 27] > 0.5;
+        const home = dropped ? root : rig.spine;
+        if (rig.gun.parent !== home) home.add(rig.gun);
+        // A rifle that left the hands between two samples jumps, not blends.
+        const g = dropped === (B[o + 27] > 0.5) ? k : 0;
+        const G = (i) => A[o + i] + (B[o + i] - A[o + i]) * g;
+        rig.gun.position.set(G(28), G(29), G(30));
+        rig.gun.rotation.set(G(31), G(32), G(33));
+    }
+
+    function sample(now, input) {
+        if (now - lastSample < SAMPLE_MS) return;
+        lastSample = now;
+        const p = new Float32Array(PLAYER_F);
+        p[0] = camera.position.x;
+        p[1] = camera.position.y;
+        p[2] = camera.position.z;
+        p[3] = input.yaw;
+        p[4] = input.pitch ?? 0;
+        p[5] = player.eye;
+        p[6] = player.bob;
+        p[7] = Math.hypot(player.vel.x, player.vel.z);
+        p[8] = player.alive ? 1 : 0;
+        const b = new Float32Array(bots.length * BOT_F);
+        bots.forEach((bot, i) => writePose(bot.rig, b, i * BOT_F));
+        const frame = { t: now, p, b };
+        frames.push(frame);
+        while (frames.length && frames[0].t < now - PRE_MS - 200) frames.shift();
+        while (events.length && events[0].t < now - PRE_MS - 200) events.shift();
+        if (open) {
+            open.frames.push(frame);
+            if (now >= open.end) open = null;
+        }
+    }
+
+    function markKill(bot, point, headshot, weapon) {
+        const now = performance.now();
+        const kill = {
+            t: now,
+            victim: bots.indexOf(bot),
+            name: bot.name,
+            headshot,
+            weapon,
+            dist: camera.position.distanceTo(point),
+            at: bot.pos.clone(),
+            from: camera.position.clone(),
+        };
+        if (open && now >= open.end) open = null;
+        if (open) {
+            open.kills.push(kill);
+            open.end = now + POST_MS;
+            return;
+        }
+        open = {
+            start: Math.max(now - PRE_MS, frames.length ? frames[0].t : now),
+            end: now + POST_MS,
+            kills: [kill],
+            frames: [...frames],
+            events: events.filter((e) => e.t >= now - PRE_MS),
+        };
+        clips.push(open);
+        // A long round of kills keeps only the best of them in memory.
+        if (clips.length > 24) {
+            const worst = clips.filter((c) => c !== open).reduce((a, c) => (score(c) < score(a) ? c : a));
+            clips.splice(clips.indexOf(worst), 1);
+        }
+    }
+
+    // What makes a highlight: more kills in one go, headshots, long shots,
+    // and above all a knife.
+    function score(clip) {
+        const each = clip.kills.reduce((s, k) => s + 3 + (k.headshot ? 3 : 0) + Math.min(4, k.dist / 30) + (k.weapon === 'karambit' ? 5 : 0), 0);
+        return each + (clip.kills.length - 1) * 4;
+    }
+
+    // The best few clips of the round, played in the order they happened.
+    function highlights(max = 5) {
+        if (open) {
+            open.end = Math.min(open.end, open.frames[open.frames.length - 1]?.t ?? open.end);
+            open = null;
+        }
+        return clips
+            .filter((c) => c.frames.length > 1)
+            .map((c) => ({ c, s: score(c) }))
+            .sort((a, b) => b.s - a.s)
+            .slice(0, max)
+            .map((x) => x.c)
+            .sort((a, b) => a.start - b.start);
+    }
+
+    function playHighlights(list, hooks = {}) {
+        replay = { list, hooks, i: -1 };
+        el.killfeed.replaceChildren();
+        el.death.hidden = true;
+        el.healthBox.hidden = true;
+        vignette = 0;
+        el.damage.style.opacity = '0';
+        camera.rotation.z = 0;
+        nextClip();
+    }
+
+    function nextClip() {
+        const r = replay;
+        r.i++;
+        if (r.i >= r.list.length) {
+            endReplay();
+            return;
+        }
+        const c = r.list[r.i];
+        r.clip = c;
+        r.t = c.start;
+        r.end = Math.min(c.end, c.frames[c.frames.length - 1].t);
+        r.cursor = 0;
+        r.ev = 0;
+        r.fed = 0;
+        r.snap = true;
+        while (r.ev < c.events.length && c.events[r.ev].t < r.t) r.ev++;
+        clearTransient();
+        el.killfeed.replaceChildren();
+        r.hooks.onClip?.(c, r.i, r.list.length);
+    }
+
+    function endReplay() {
+        if (!replay) return;
+        const { hooks } = replay;
+        replay = null;
+        avatar.body.visible = false;
+        clearTransient();
+        el.killfeed.replaceChildren();
+        hooks.onDone?.();
+    }
+
+    function poseAvatar(A, B, k) {
+        const L = (i) => A[i] + (B[i] - A[i]) * k;
+        const eye = L(5);
+        avatar.body.visible = A[8] > 0.5;
+        avatar.body.position.set(L(0), L(1) - eye, L(2));
+        const turn = Math.atan2(Math.sin(B[3] - A[3]), Math.cos(B[3] - A[3]));
+        // The camera looks down -Z at yaw 0; the soldier faces +Z.
+        avatar.body.rotation.set(0, A[3] + turn * k + Math.PI, 0);
+        const pitch = L(4);
+        const crouch = clamp((EYE - eye) / (EYE - EYE_CROUCH), 0, 1);
+        const bob = L(6);
+        const swing = Math.min(1, L(7) / 8);
+        const [a, b] = avatar.legs;
+        a.thigh.rotation.x = -Math.sin(bob) * 0.6 * swing - 0.9 * crouch;
+        b.thigh.rotation.x = Math.sin(bob) * 0.6 * swing - 0.9 * crouch;
+        a.knee.rotation.x = Math.max(0, Math.sin(bob + 1.6)) * 0.9 * swing + 1.5 * crouch;
+        b.knee.rotation.x = Math.max(0, -Math.sin(bob + 1.6)) * 0.9 * swing + 1.5 * crouch;
+        avatar.hips.position.y = 4.4 - 1.3 * crouch + Math.abs(Math.cos(bob)) * 0.12 * swing;
+        avatar.spine.rotation.x = 0.25 * crouch - pitch * 0.5;
+        avatar.neck.rotation.x = -pitch * 0.4;
+    }
+
+    const avatarMuzzle = new THREE.Vector3();
+    function playEvent(e) {
+        switch (e.type) {
+            case 'spray': spray(e.at, e.dir, e.count, e.speed, e.material, e.spread, e.life); break;
+            case 'mist': mist(e.at, e.size); break;
+            case 'tracer': tracer(e.from, e.to); break;
+            case 'flash': muzzleFlash(e.at); break;
+            case 'botshot': botShotSound(camera.position.distanceTo(e.at)); break;
+            case 'dink': dink(); break;
+            case 'thud': thud(20); break;
+            case 'pshot': ctx.shotSound?.(e.weapon); break;
+            case 'ptracer':
+                avatar.body.updateMatrixWorld(true);
+                avatar.muzzle.getWorldPosition(avatarMuzzle);
+                tracer(avatarMuzzle, e.to);
+                muzzleFlash(avatarMuzzle);
+                break;
+        }
+    }
+
+    // The camera: over the bot's shoulder, looking at you, until the shot
+    // lands; then slow motion as it swings round to watch the body fall.
+    const camPos = new THREE.Vector3();
+    const camLook = new THREE.Vector3();
+    const want = new THREE.Vector3();
+    const look = new THREE.Vector3();
+    const you = new THREE.Vector3();
+    const toYou = new THREE.Vector3();
+    const side = new THREE.Vector3();
+    const anchor = new THREE.Vector3();
+    const camRay = new THREE.Ray();
+    const shoulder = (at, d, s, out) => out.copy(at).addScaledVector(d, -5.5).addScaledVector(s, 2.4).setY(at.y + 11);
+
+    function aimCamera(r, pA, pB, k, dt) {
+        const c = r.clip;
+        const kill = c.kills.find((x) => x.t > r.t - 900) || c.kills[c.kills.length - 1];
+        const victim = bots[kill.victim];
+        you.set(pA[0] + (pB[0] - pA[0]) * k, pA[1] + (pB[1] - pA[1]) * k - 1, pA[2] + (pB[2] - pA[2]) * k);
+        const body = victim ? victim.rig.body.position : kill.at;
+        const from = r.t < kill.t ? body : kill.at;
+        toYou.subVectors(r.t < kill.t ? you : kill.from, from).setY(0);
+        if (toYou.lengthSq() < 1e-4) toYou.set(0, 0, 1);
+        toYou.normalize();
+        side.set(-toYou.z, 0, toYou.x);
+
+        if (r.t < kill.t) {
+            shoulder(body, toYou, side, want);
+            look.copy(you);
+            anchor.copy(body).setY(body.y + 9);
+        } else {
+            const b = easeOut((r.t - kill.t) / 900);
+            shoulder(kill.at, toYou, side, want);
+            tmpB.copy(kill.at).addScaledVector(side, 10).addScaledVector(toYou, 2).setY(kill.at.y + 6);
+            want.lerp(tmpB, b);
+            look.copy(you).lerp(tmpA.copy(body).setY(body.y + 2), b);
+            anchor.copy(kill.at).setY(kill.at.y + 5);
+        }
+
+        // Pull in rather than look through a wall.
+        tmpA.subVectors(want, anchor);
+        const dist = tmpA.length();
+        if (dist > 1e-3) {
+            camRay.set(anchor, tmpA.divideScalar(dist));
+            const wall = rayHitsWorld(camRay, dist);
+            if (wall) want.copy(anchor).addScaledVector(camRay.direction, Math.max(1, wall.distance - 0.8));
+        }
+
+        if (r.snap) {
+            camPos.copy(want);
+            camLook.copy(look);
+            r.snap = false;
+        } else {
+            const s = 1 - Math.exp(-dt * 7);
+            camPos.lerp(want, s);
+            camLook.lerp(look, Math.min(1, s * 1.4));
+        }
+        camera.position.copy(camPos);
+        camera.lookAt(camLook);
+    }
+
+    function replayTick(now, dt) {
+        const r = replay;
+        if (!r) return;
+        const c = r.clip;
+        // Slow motion through each kill.
+        const slow = c.kills.some((x) => r.t - x.t > -180 && r.t - x.t < 750);
+        r.t += dt * 1000 * (slow ? 0.3 : 1);
+        if (r.t >= r.end) {
+            nextClip();
+            return;
+        }
+
+        const F = c.frames;
+        while (r.cursor < F.length - 2 && F[r.cursor + 1].t <= r.t) r.cursor++;
+        const A = F[r.cursor];
+        const B = F[Math.min(r.cursor + 1, F.length - 1)];
+        const k = B.t > A.t ? clamp((r.t - A.t) / (B.t - A.t), 0, 1) : 0;
+        const n = Math.min(bots.length, A.b.length / BOT_F, B.b.length / BOT_F);
+        for (let i = 0; i < n; i++) readPose(bots[i].rig, A.b, B.b, i * BOT_F, k);
+        poseAvatar(A.p, B.p, k);
+
+        while (r.ev < c.events.length && c.events[r.ev].t <= r.t) playEvent(c.events[r.ev++]);
+        while (r.fed < c.kills.length && c.kills[r.fed].t <= r.t) {
+            const x = c.kills[r.fed++];
+            feed('you', x.weapon, x.name, x.headshot, true);
+            r.hooks.onKill?.(x, r.fed, c.kills.length);
+        }
+
+        aimCamera(r, A.p, B.p, k, dt);
+        updateEffects(now, dt);
+    }
+
     /* ---------- lifecycle ---------- */
 
-    function clearEffects() {
+    function clearTransient() {
         for (const p of particles) {
             p.born = 0;
             p.mesh.visible = false;
@@ -1128,6 +1413,10 @@ export function createBots(ctx) {
             t.born = 0;
             t.line.visible = false;
         }
+    }
+
+    function clearEffects() {
+        clearTransient();
         bloodDecal.clear();
         holeDecal.clear();
         el.killfeed.replaceChildren();
@@ -1138,6 +1427,7 @@ export function createBots(ctx) {
     function start() {
         clearEffects();
         removeBots();
+        resetReel();
         stats.kills = 0;
         stats.deaths = 0;
         stats.headshots = 0;
@@ -1171,6 +1461,7 @@ export function createBots(ctx) {
 
     function stop() {
         active = false;
+        resetReel();
         removeBots();
         clearEffects();
         camera.position.set(0, 0, 0);
@@ -1212,6 +1503,15 @@ export function createBots(ctx) {
         },
         get bobPhase() {
             return player.bob;
+        },
+        setLook,
+        highlights,
+        playHighlights,
+        replayTick,
+        skipClip: () => replay && nextClip(),
+        endReplay,
+        get replaying() {
+            return !!replay;
         },
         difficulty: () => difficulty,
     };

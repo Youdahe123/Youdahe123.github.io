@@ -5,6 +5,7 @@
 // does the drawing; the pointer lock, the spawning and the scoring are all here.
 import * as THREE from './vendor/three/three.module.min.js';
 import { createBots, collectColliders, DIFFICULTIES, BOT_COUNTS } from './bots.js';
+import { buildSoldier, aimPose, disposeSoldier, LOOK_PARTS, DEFAULT_LOOK, cleanLook, randomLook } from './soldier.js';
 import { mergeGeometries } from './vendor/three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from './vendor/three/addons/loaders/GLTFLoader.js';
 
@@ -26,6 +27,7 @@ const MODE_KEY = 'aim.mode';
 const DIFFICULTY_KEY = 'aim.difficulty';
 const BOT_COUNT_KEY = 'aim.botCount';
 const BOTS_BEST_KEY = 'aim.botsBest';
+const LOOK_KEY = 'aim.look';
 const BOTS_ROUND_MS = 90000;
 
 // The arena is a box the player stands in the middle of. Targets spawn on a
@@ -81,6 +83,7 @@ const elSaveMsg = document.getElementById('aimSaveMsg');
 const elBoard = document.getElementById('aimBoard');
 const elBoardEmpty = document.getElementById('aimBoardEmpty');
 const elGuns = document.getElementById('aimGuns');
+const elLook = document.getElementById('aimLook');
 const elTargets = document.getElementById('aimTargets');
 const elMaps = document.getElementById('aimMaps');
 const elScope = document.getElementById('aimScope');
@@ -4036,6 +4039,12 @@ let triggerHeld = false;
 let showcase = false;
 let showcaseX = 0.06;
 let viewAmbient, showcaseLight, showcaseGlow;
+// The menu's other showpiece: your character, turning where the gun floats
+// while you dress it. Whichever you last pointed at or picked is the one shown.
+let showcaseSubject = 'gun';
+let lookRig = null;
+let look = DEFAULT_LOOK;
+let lookTwirlAt = 0;
 
 // The middle of the gap between the panel and the board, in screen units, read
 // off the layout so the gun stays centred in it at any window size.
@@ -4887,7 +4896,7 @@ const WEAPONS = [
     { id: 'deagle', label: 'deagle', build: buildDeagle, scale: 0.42, ...PISTOL_HOLD, showcase: 1.12,
         inspectStyle: 'twirl', inspectMs: 2600, mag: 7, reloadStyle: 'mag', reloadMs: 1900, pivot: new THREE.Vector3(0, -0.08, -0.12),
         slideTravel: 0.13, muzzleFlip: 0.55, grip: new THREE.Vector3(0, -0.24, 0.06),
-        cooldown: 380, auto: false, kick: 6.5, punch: 0.02, spread: { step: 0.03, max: 0.06 }, flash: 1.5, tracer: 0xffd08a, tracerWidth: 0.6 },
+        cooldown: 380, auto: false, kick: 6.5, punch: 0.02, spread: { step: 0.03, max: 0.06 }, crouchExact: true, flash: 1.5, tracer: 0xffd08a, tracerWidth: 0.6 },
     { id: 'revolver', label: 'revolver', build: buildRevolver, scale: 0.42, ...PISTOL_HOLD, showcase: 1.25,
         inspectStyle: 'cylinder', inspectMs: 3000, mag: 8, reloadStyle: 'cylinder', reloadMs: 2300, pivot: new THREE.Vector3(0, -0.08, 0.05),
         cooldown: 480, auto: false, kick: 9.5, punch: 0.016, spread: null, flash: 1.3, tracer: 0xffd08a, tracerWidth: 0.55 },
@@ -5614,7 +5623,8 @@ function fireGun(ndc) {
 function setShowcase(on) {
     showcase = on && window.innerWidth > 900;
     if (showcase) measureShowcase();
-    if (gun) gun.visible = showcase;
+    if (gun) gun.visible = showcase && showcaseSubject === 'gun';
+    if (lookRig) lookRig.body.visible = showcase && showcaseSubject === 'character';
     applyShowcaseLights();
 }
 
@@ -5628,6 +5638,7 @@ function applyShowcaseLights() {
 function showGun(visible) {
     if (!gun) return;
     showcase = false;
+    if (lookRig) lookRig.body.visible = false;
     applyShowcaseLights();
     gun.visible = visible;
     if (visible) return;
@@ -5661,7 +5672,7 @@ function render() {
     if (!renderer) return;
     renderer.clear();
     renderer.render(scene, camera);
-    if (gun && gun.visible && !scoped) {
+    if (((gun && gun.visible) || lookRig?.body.visible) && !scoped) {
         // Fresh depth for the viewmodel pass, so the rifle is always in front
         // of the arena no matter how close a target has spawned.
         renderer.clearDepth();
@@ -5836,6 +5847,9 @@ function fire(ndc) {
         if (moving > 0) aim = wander(moving * (weapon.scope ? 0.12 : weapon.pellets ? 0.01 : 0.035));
         // Crouched and still, a spray stays tighter, the way it does in csgo.
         if (bots.crouched && streak) aim.lerp(ndc || CENTRE, 0.35);
+        // The deagle crouched on the ground is a sniper: every shot lands
+        // dead on the crosshair, however fast they come.
+        if (weapon.crouchExact && bots.crouched && !bots.airborne) aim = ndc || CENTRE;
     }
     fireGun(aim);
 
@@ -5990,31 +6004,20 @@ function endRound() {
     hud.hidden = true;
     hud.setAttribute('aria-hidden', 'true');
     crosshair.hidden = true;
-    panel.hidden = false;
     showGun(false);
-    setShowcase(true);
     if (document.pointerLockElement) document.exitPointerLock();
     clearKeys();
 
+    // Bots mode: the round's best kills play back before the results.
     if (botsMode()) {
-        const top = botsBest();
-        const beatenBots = kills > top;
-        if (beatenBots) remember(BOTS_BEST_KEY, String(kills));
-        bots.stop();
-        targetGroup.visible = true;
-        applyLook();
-        elTitle.textContent = beatenBots ? 'new best' : 'time';
-        elStatLabel.textContent = 'kills';
-        elStatValue.textContent = String(kills);
-        elStatNote.textContent = `${deaths} ${deaths === 1 ? 'death' : 'deaths'} · ${headshotRate()}% headshots · ${accuracy()}% accuracy · best ${Math.max(top, kills)}`;
-        elStart.textContent = 'go again';
-        setNote('');
-        lastRun = null;
-        lockPicks(false);
-        elSaveOpen.hidden = true;
+        const reel = bots.highlights(5);
+        if (reel.length) playReel(reel);
+        else finishBotsRound();
         return;
     }
 
+    panel.hidden = false;
+    setShowcase(true);
     const beaten = hits > best;
     if (beaten) {
         best = hits;
@@ -6035,6 +6038,56 @@ function endRound() {
     lastRun = hits > 0 ? { score: hits, shots, gun: weapon.id, reload: reloadsOn } : null;
     lockPicks(false);
     elSaveOpen.hidden = !lastRun || !boardOnline;
+}
+
+function finishBotsRound() {
+    panel.hidden = false;
+    setShowcase(true);
+    const top = botsBest();
+    const beatenBots = kills > top;
+    if (beatenBots) remember(BOTS_BEST_KEY, String(kills));
+    bots.stop();
+    targetGroup.visible = true;
+    applyLook();
+    elTitle.textContent = beatenBots ? 'new best' : 'time';
+    elStatLabel.textContent = 'kills';
+    elStatValue.textContent = String(kills);
+    elStatNote.textContent = `${deaths} ${deaths === 1 ? 'death' : 'deaths'} · ${headshotRate()}% headshots · ${accuracy()}% accuracy · best ${Math.max(top, kills)}`;
+    elStart.textContent = 'go again';
+    setNote('');
+    lastRun = null;
+    lockPicks(false);
+    elSaveOpen.hidden = true;
+}
+
+// The killcam reel: letterboxed, one clip per highlight, with who went down
+// and how along the bottom. Space skips a clip, escape skips the lot.
+const KILLCAM_TITLES = ['killcam', 'double kill', 'triple kill', 'quad kill', 'rampage'];
+
+function playReel(reel) {
+    elKillcam.hidden = false;
+    stage.classList.add('is-killcam');
+    bots.playHighlights(reel, {
+        onClip(clip, i, total) {
+            elKcTitle.textContent = KILLCAM_TITLES[Math.min(clip.kills.length, KILLCAM_TITLES.length) - 1];
+            elKcCount.textContent = `${i + 1} / ${total}`;
+            elKcLine.textContent = clip.kills.map((k) => [
+                k.name,
+                k.weapon,
+                k.headshot ? 'headshot' : '',
+                `${Math.round(k.dist * 0.22)}m`,
+            ].filter(Boolean).join(' · ')).join('  /  ');
+            // Restart the slide-in for each clip.
+            elKillcam.classList.remove('is-in');
+            void elKillcam.offsetWidth;
+            elKillcam.classList.add('is-in');
+        },
+        onDone() {
+            elKillcam.hidden = true;
+            stage.classList.remove('is-killcam');
+            finishBotsRound();
+        },
+    });
 }
 
 function accuracy() {
@@ -6138,13 +6191,15 @@ function loop(now) {
     updateTargets(now);
     updateBursts(now);
     if (envUpdate) envUpdate(now, dt);
-    if (running && botsMode()) bots.update(now, dt, { keys, yaw });
+    if (running && botsMode()) bots.update(now, dt, { keys, yaw, pitch });
+    if (bots?.replaying) bots.replayTick(now, dt);
     spinEggs(now);
     cullChunks();
     // The sky stays centred on the viewer, so walking to the edge of a big map
     // never reaches it.
     if (skyMesh) skyMesh.position.copy(camera.position);
     updateGun(now, dt);
+    updateLookPreview(now);
 
     if (running) tickAmmo(now);
     if (running && triggerHeld && isAuto()) fire();
@@ -6261,6 +6316,99 @@ function buildChips(container, options, selected, onPick) {
 // Mid-round the loadout is locked, so a paused run cannot swap guns halfway.
 function lockPicks(locked) {
     for (const chip of [...elModes.children, ...elDifficulty.children, ...elBotCount.children, ...elGuns.children, ...elReloads.children, ...elTargets.children, ...elMaps.children]) chip.disabled = locked;
+}
+
+/* ---------- your character ---------- */
+
+// Built at the soldiers' own scale (about 10 units tall) and shrunk to sit in
+// the viewmodel scene next to where the guns float.
+const LOOK_SCALE = 0.12;
+
+function buildLookPreview() {
+    if (lookRig) {
+        viewScene.remove(lookRig.body);
+        disposeSoldier(lookRig);
+    }
+    lookRig = buildSoldier(look);
+    aimPose(lookRig);
+    lookRig.body.scale.setScalar(LOOK_SCALE);
+    lookRig.body.visible = showcase && showcaseSubject === 'character';
+    viewScene.add(lookRig.body);
+}
+
+function setLook(next) {
+    look = cleanLook(next);
+    remember(LOOK_KEY, JSON.stringify(look));
+    buildLookPreview();
+    bots?.setLook(look);
+    lookTwirlAt = performance.now();
+}
+
+function showSubject(subject) {
+    showcaseSubject = subject;
+    if (!showcase) return;
+    if (gun) gun.visible = subject === 'gun';
+    if (lookRig) lookRig.body.visible = subject === 'character';
+}
+
+// Facing you with a gentle sway, breathing, glancing about, and a twirl on
+// every change so each side of it gets a look.
+function updateLookPreview(now) {
+    if (!lookRig || !lookRig.body.visible) return;
+    const t = now / 1000;
+    const d = 2.6;
+    const half = Math.tan((viewCamera.fov * Math.PI) / 360) * d;
+    const cx = showcaseX * half * viewCamera.aspect;
+    lookRig.body.position.set(cx, -0.66 + Math.sin(t * 0.9) * 0.03, -d);
+    const twirl = easeInOut(clamp((now - lookTwirlAt) / 900, 0, 1)) * Math.PI * 2;
+    lookRig.body.rotation.set(0.06, Math.sin(t * 0.45) * 0.8 + twirl, 0);
+    lookRig.spine.rotation.x = Math.sin(t * 1.6) * 0.02;
+    lookRig.neck.rotation.y = Math.sin(t * 0.7) * 0.25;
+    showcaseLight.position.set(cx - d * 0.3, d * 0.45, -d * 0.4);
+    showcaseGlow.position.set(cx, 0, -d - 0.4);
+    showcaseGlow.scale.setScalar(d * 1.1);
+}
+
+const hex = (n) => `#${n.toString(16).padStart(6, '0')}`;
+
+// One row per part: chips for the shapes, swatches for the colours.
+function buildLookPicker() {
+    elLook.replaceChildren();
+    for (const part of LOOK_PARTS) {
+        const label = document.createElement('span');
+        label.className = 'aim-look-label';
+        label.id = `aimLook-${part.key}`;
+        label.textContent = part.label;
+        const box = document.createElement('div');
+        box.setAttribute('role', 'radiogroup');
+        box.setAttribute('aria-labelledby', label.id);
+        const pick = (id) => {
+            setLook({ ...look, [part.key]: id });
+            showSubject('character');
+        };
+        if (part.swatch) {
+            box.className = 'aim-swatch-row';
+            for (const option of part.options) {
+                const swatch = document.createElement('button');
+                swatch.type = 'button';
+                swatch.className = 'aim-swatch';
+                swatch.setAttribute('role', 'radio');
+                swatch.setAttribute('aria-label', option.label);
+                swatch.title = option.label;
+                swatch.setAttribute('aria-checked', String(option.id === look[part.key]));
+                swatch.style.background = hex(option.value);
+                swatch.addEventListener('click', () => {
+                    for (const other of box.children) other.setAttribute('aria-checked', String(other === swatch));
+                    pick(option.id);
+                });
+                box.append(swatch);
+            }
+        } else {
+            box.className = 'aim-chips';
+            buildChips(box, part.options, look[part.key], pick);
+        }
+        elLook.append(label, box);
+    }
 }
 
 /* ---------- crosshair ---------- */
@@ -6637,6 +6785,13 @@ document.addEventListener('pointerlockerror', () => {
 });
 
 document.addEventListener('keydown', (event) => {
+    if (bots.replaying) {
+        if (event.code === 'Space') bots.skipClip();
+        else if (event.key === 'Escape') bots.endReplay();
+        else return;
+        event.preventDefault();
+        return;
+    }
     if (event.key === 'Escape' && running) {
         pause('');
         return;
@@ -6664,10 +6819,18 @@ selectTarget(recall(TARGET_KEY));
 selectMap(recall(MAP_KEY));
 buildScene();
 buildViewmodel();
+try {
+    look = cleanLook(JSON.parse(recall(LOOK_KEY) || 'null'));
+} catch {
+    look = cleanLook(null);
+}
+buildLookPreview();
+buildLookPicker();
 selectWeapon(recall(GUN_KEY));
 setShowcase(true);
 buildChips(elGuns, WEAPONS, weapon.id, (id) => {
     selectWeapon(id);
+    showSubject('gun');
     remember(GUN_KEY, id);
     updateHint();
 });
@@ -6713,13 +6876,37 @@ window.addEventListener('resize', () => {
 });
 requestAnimationFrame(loop);
 
+const elKillcam = document.getElementById('aimKillcam');
+const elKcTitle = document.getElementById('aimKcTitle');
+const elKcCount = document.getElementById('aimKcCount');
+const elKcLine = document.getElementById('aimKcLine');
+document.getElementById('aimKcSkip').addEventListener('click', () => bots.skipClip());
+document.getElementById('aimKcSkipAll').addEventListener('click', () => bots.endReplay());
+
+// Pointing at a row brings its thing up in the showcase.
+document.getElementById('aimGunRow').addEventListener('pointerenter', () => showSubject('gun'));
+document.getElementById('aimLookRow').addEventListener('pointerenter', () => showSubject('character'));
+document.getElementById('aimLookRow').addEventListener('focusin', () => showSubject('character'));
+document.getElementById('aimLookRandom').addEventListener('click', () => {
+    setLook(randomLook());
+    buildLookPicker();
+    showSubject('character');
+});
+document.getElementById('aimLookReset').addEventListener('click', () => {
+    setLook(DEFAULT_LOOK);
+    buildLookPicker();
+    showSubject('character');
+});
+
 bots = createBots({
+    look,
     scene,
     camera,
     floorY: FLOOR_Y,
     envRoot,
     glow: GLOW,
     sound: { burst, tone },
+    shotSound: (id) => (SHOT_SOUNDS[id] || SHOT_SOUNDS.ar)(),
     el: {
         health: document.getElementById('aimHealthValue'),
         healthBox: document.getElementById('aimHealth'),
@@ -6751,7 +6938,7 @@ bots.setColliders(mapColliders);
 // already built with stand-ins, build it again with the real thing, unless
 // a round is on.
 kenneyReady.then(() => {
-    if (builtWide && !running && remainingMs <= 0) selectMap(mapKind.id);
+    if (builtWide && !running && remainingMs <= 0 && !bots.replaying) selectMap(mapKind.id);
 });
 
 // Mode, difficulty and bot count. Bots mode needs a keyboard, so phones only
