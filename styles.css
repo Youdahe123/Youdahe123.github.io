@@ -5342,6 +5342,53 @@ h1.post-full-title::before {
     display: none;
 }
 
+/* What the picked mode is, under the mode chips. */
+.aim-mode-note {
+    max-width: 30rem;
+    margin: 0.55rem 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ink-muted);
+}
+
+/* The menu's demo: the round's own HUD stays out of it, and a tag says what
+   is going on back there. */
+.is-demo .aim-killfeed,
+.is-demo .aim-damage,
+.is-demo .aim-health {
+    display: none;
+}
+
+.aim-demo-tag {
+    position: absolute;
+    left: 50%;
+    bottom: 1.4rem;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0.35rem 0.8rem;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.55);
+    font-family: var(--ink-font);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #f0e9dd;
+    pointer-events: none;
+}
+
+.aim-demo-tag[hidden] {
+    display: none;
+}
+
+@media (max-width: 900px) {
+    .aim-demo-tag {
+        display: none;
+    }
+}
+
 /* The character picker: a small label beside each row of chips or swatches. */
 .aim-look {
     display: grid;

@@ -84,6 +84,8 @@ const elBoard = document.getElementById('aimBoard');
 const elBoardEmpty = document.getElementById('aimBoardEmpty');
 const elGuns = document.getElementById('aimGuns');
 const elLook = document.getElementById('aimLook');
+const elModeNote = document.getElementById('aimModeNote');
+const elDemoTag = document.getElementById('aimDemoTag');
 const elTargets = document.getElementById('aimTargets');
 const elMaps = document.getElementById('aimMaps');
 const elScope = document.getElementById('aimScope');
@@ -119,14 +121,33 @@ let renderer, scene, camera, targetGroup;
 // Two ways to play: the aim trainer's floating targets, or walking a map
 // against bots that shoot back (bots.js).
 const MODES = [
-    { id: 'aim', label: 'aim lab' },
-    { id: 'bots', label: 'bots' },
+    { id: 'aim', label: 'aim lab', note: 'targets pop up around the room. click as many as you can in 30 seconds. pure speed and accuracy.' },
+    { id: 'bots', label: 'bots', note: 'a 90 second deathmatch on a real map. walk with wasd while the bots hunt you and shoot back. most kills wins, and your best ones replay at the end.' },
 ];
 let mode = 'aim';
 let bots = null;
 let kills = 0;
 let deaths = 0;
 const botsMode = () => mode === 'bots';
+
+// The menu's demo: a ghost player behind the menu playing whichever mode is
+// picked, so what each one is shows before you press start. See syncDemo.
+const demo = {
+    on: false,
+    kind: null,
+    keys: { forward: false, back: false, left: false, right: false, jump: false, walk: false, crouch: false },
+    target: null,
+    from: { yaw: 0, pitch: 0 },
+    to: { yaw: 0, pitch: 0 },
+    flickAt: 0,
+    flickMs: 0,
+    settleUntil: 0,
+    nextShot: 0,
+    spotted: [],
+    lookAt: 0,
+    wanderYaw: 0,
+    wanderUntil: 0,
+};
 
 // Movement keys, held.
 const keys = { forward: false, back: false, left: false, right: false, jump: false, walk: false, crouch: false };
@@ -3692,6 +3713,7 @@ function selectMap(id) {
     skyMesh = null;
     eggMeshes = [];
 
+    stopDemo();
     builtWide = botsMode();
     const made = mapKind.build(envRoot, { wide: builtWide }) || {};
     mapBounds = made.bounds || mapKind.bounds;
@@ -5210,7 +5232,7 @@ let noiseBuffer = null;
 let queued = [];
 
 function sound() {
-    if (!soundOn) return null;
+    if (!soundOn || demo.on) return null;
     if (!audio) {
         const Ctx = window.AudioContext || window.webkitAudioContext;
         if (!Ctx) return null;
@@ -5939,6 +5961,7 @@ function afterShot(now) {
 /* ---------- round ---------- */
 
 function startRound() {
+    stopDemo();
     if (weapon.melee) selectWeapon(primaryId);
     hits = 0;
     shots = 0;
@@ -6177,6 +6200,151 @@ function showModeStats() {
     }
 }
 
+/* ---------- the demo ---------- */
+
+function demoWanted() {
+    return !running && remainingMs <= 0 && !bots?.replaying && !panel.hidden && !!bots;
+}
+
+// Started and stopped from the frame loop, so every way into or out of the
+// menu (a round ending, a pause, a mode or map change) is covered.
+function syncDemo() {
+    const want = demoWanted();
+    if (want && demo.on && demo.kind !== mode) stopDemo();
+    if (want && !demo.on) startDemo();
+    else if (!want && demo.on) stopDemo();
+}
+
+function startDemo() {
+    demo.on = true;
+    demo.kind = mode;
+    demo.target = null;
+    demo.nextShot = performance.now() + 700;
+    demo.wanderUntil = 0;
+    demo.spotted = [];
+    for (const k in demo.keys) demo.keys[k] = false;
+    stage.classList.add('is-demo');
+    crosshair.hidden = false;
+    elDemoTag.hidden = false;
+    if (demo.kind === 'bots') {
+        targetGroup.visible = false;
+        bots.start({ demo: true });
+        yaw = Math.random() * Math.PI * 2;
+    } else {
+        targetGroup.visible = true;
+        yaw = 0;
+    }
+    pitch = 0;
+    applyLook();
+}
+
+function stopDemo() {
+    if (!demo.on) return;
+    demo.on = false;
+    stage.classList.remove('is-demo');
+    crosshair.hidden = true;
+    elDemoTag.hidden = true;
+    if (demo.kind === 'bots') {
+        bots.stop();
+        targetGroup.visible = true;
+        targetGroup.children.forEach(placeTarget);
+    }
+    yaw = 0;
+    pitch = 0;
+    applyLook();
+}
+
+const angleTo = (point) => {
+    const dx = point.x - camera.position.x;
+    const dy = point.y - camera.position.y;
+    const dz = point.z - camera.position.z;
+    return { yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) };
+};
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+
+function demoTick(now, dt) {
+    // The tag sits under the open middle of the menu, where the gun floats.
+    const left = `${((showcaseX + 1) * 50).toFixed(1)}%`;
+    if (elDemoTag.style.left !== left) elDemoTag.style.left = left;
+    if (demo.kind === 'bots') demoBots(now, dt);
+    else demoAim(now);
+    applyLook();
+}
+
+// Aim lab: flick to a target the way a person does, fast then settling, a
+// hair past it now and then, a beat to correct, and the shot.
+function demoAim(now) {
+    if (!demo.target || !demo.target.visible) {
+        if (now < demo.nextShot - 200) return;
+        const live = targetGroup.children.filter((t) => t.visible);
+        if (!live.length) return;
+        demo.target = live[Math.floor(Math.random() * live.length)];
+        const want = angleTo(demo.target.position);
+        const off = Math.random() < 0.35 ? 0.05 : 0.015;
+        demo.from = { yaw, pitch };
+        demo.to = { yaw: yaw + wrap(want.yaw - yaw) + (Math.random() - 0.5) * off, pitch: want.pitch + (Math.random() - 0.5) * off };
+        demo.flickAt = now;
+        demo.flickMs = 170 + Math.random() * 180;
+        demo.settleUntil = now + demo.flickMs + 60 + Math.random() * 110;
+        return;
+    }
+    const want = angleTo(demo.target.position);
+    if (now < demo.flickAt + demo.flickMs) {
+        const e = easeOut((now - demo.flickAt) / demo.flickMs);
+        yaw = lerp(demo.from.yaw, demo.to.yaw, e);
+        pitch = lerp(demo.from.pitch, demo.to.pitch, e);
+        return;
+    }
+    // Onto it properly, following the bob.
+    yaw += wrap(want.yaw - yaw) * 0.35;
+    pitch += (want.pitch - pitch) * 0.35;
+    if (now < demo.settleUntil) return;
+    spawnBurst(demo.target.position);
+    placeTarget(demo.target);
+    demo.target = null;
+    demo.nextShot = now + 240 + Math.random() * 260;
+}
+
+// Bots: walk the map, and when a bot comes into view crouch, swing onto its
+// head and tap it, as the deagle likes.
+function demoBots(now, dt) {
+    const k = demo.keys;
+    if (now >= demo.lookAt) {
+        demo.lookAt = now + 150;
+        demo.spotted = bots.visibleTargets();
+    }
+    const target = demo.spotted[0];
+    if (target) {
+        k.forward = false;
+        k.crouch = true;
+        const want = angleTo(target.head);
+        const turn = 1 - Math.exp(-dt * 9);
+        yaw += wrap(want.yaw - yaw) * turn;
+        pitch += (want.pitch - pitch) * turn;
+        const gunId = weapon.melee ? 'deagle' : weapon.id;
+        const onIt = Math.abs(wrap(want.yaw - yaw)) < 0.012 && Math.abs(want.pitch - pitch) < 0.012;
+        if (onIt && now >= demo.nextShot) {
+            const dir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+            const result = bots.shoot(new THREE.Ray(camera.position.clone(), dir), gunId, weapon.melee ? 'deagle' : weapon.label);
+            demo.nextShot = now + Math.max(weapon.melee ? 380 : weapon.cooldown, 260) + Math.random() * 250;
+            if (result.kill) {
+                demo.spotted = [];
+                demo.lookAt = now + 500;
+            }
+        }
+        return;
+    }
+    k.crouch = false;
+    k.forward = true;
+    // Wander: a new heading every few seconds, or on walking into something.
+    if (now > demo.wanderUntil || (now > demo.wanderUntil - 2600 && bots.speed < 4)) {
+        demo.wanderYaw = yaw + (Math.random() - 0.5) * 3.5;
+        demo.wanderUntil = now + 2500 + Math.random() * 2000;
+    }
+    yaw += wrap(demo.wanderYaw - yaw) * (1 - Math.exp(-dt * 3));
+    pitch += (0 - pitch) * (1 - Math.exp(-dt * 3));
+}
+
 // One loop for the whole page, running whether or not a round is on: the
 // targets need to bob and face the camera on the menu too, and a target that
 // only grew in during a round was invisible before the first start.
@@ -6191,7 +6359,10 @@ function loop(now) {
     updateTargets(now);
     updateBursts(now);
     if (envUpdate) envUpdate(now, dt);
+    syncDemo();
+    if (demo.on) demoTick(now, dt);
     if (running && botsMode()) bots.update(now, dt, { keys, yaw, pitch });
+    else if (demo.on && demo.kind === 'bots') bots.update(now, dt, { keys: demo.keys, yaw, pitch });
     if (bots?.replaying) bots.replayTick(now, dt);
     spinEggs(now);
     cullChunks();
@@ -6945,6 +7116,7 @@ kenneyReady.then(() => {
 // get the aim trainer.
 function applyMode() {
     elTitle.textContent = botsMode() ? 'bots' : 'aim trainer';
+    elModeNote.textContent = MODES.find((m) => m.id === mode).note;
     updateEggLine();
     // Bots mode plays on the wider build of the map.
     if (builtWide !== botsMode()) selectMap(mapKind.id);

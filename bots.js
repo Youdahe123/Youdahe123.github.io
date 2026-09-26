@@ -93,6 +93,8 @@ export function createBots(ctx) {
     let bounds = [-30, 30, -30, 30];
     let colliders = [];
     let active = false;
+    // The menu's demo: a ghost player who cannot be hurt and scores nothing.
+    let demoMode = false;
 
     const player = {
         vel: new THREE.Vector3(),
@@ -497,7 +499,7 @@ export function createBots(ctx) {
     let vignette = 0;
 
     function hurtPlayer(amount, bot, headshot) {
-        if (!player.alive) return;
+        if (!player.alive || demoMode) return;
         player.health = Math.max(0, player.health - amount);
         vignette = Math.min(0.75, vignette + 0.35 + amount / 200);
         hurt();
@@ -561,7 +563,7 @@ export function createBots(ctx) {
         thud(point.distanceTo(camera.position));
         feed('you', weaponLabel, bot.name, headshot, true);
         markKill(bot, point, headshot, weaponLabel);
-        ctx.onKill?.({ headshot, name: bot.name });
+        if (!demoMode) ctx.onKill?.({ headshot, name: bot.name });
     }
 
     const shotRay = new THREE.Raycaster();
@@ -1424,7 +1426,8 @@ export function createBots(ctx) {
         el.damage.style.opacity = '0';
     }
 
-    function start() {
+    function start(opts = {}) {
+        demoMode = !!opts.demo;
         clearEffects();
         removeBots();
         resetReel();
@@ -1447,8 +1450,21 @@ export function createBots(ctx) {
         player.alive = true;
         player.onGround = true;
         el.death.hidden = true;
-        el.healthBox.hidden = false;
+        el.healthBox.hidden = demoMode;
         updateHealth();
+    }
+
+    // Heads of the bots in plain view of the camera, nearest first: what the
+    // menu's demo player looks for.
+    function visibleTargets() {
+        const out = [];
+        for (const bot of bots) {
+            if (!bot.alive) continue;
+            const head = new THREE.Vector3(bot.pos.x, bot.pos.y + 8.35, bot.pos.z);
+            const dist = head.distanceTo(camera.position);
+            if (dist < 120 && lineOfSight(camera.position, head)) out.push({ head, dist, name: bot.name });
+        }
+        return out.sort((a, b) => a.dist - b.dist);
     }
 
     function removeBots() {
@@ -1505,6 +1521,7 @@ export function createBots(ctx) {
             return player.bob;
         },
         setLook,
+        visibleTargets,
         highlights,
         playHighlights,
         replayTick,

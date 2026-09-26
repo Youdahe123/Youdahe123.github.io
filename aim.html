@@ -39,6 +39,9 @@
         <div class="aim-damage" id="aimDamage" aria-hidden="true"></div>
         <p class="aim-death" id="aimDeath" hidden></p>
 
+        <!-- Behind the menu, a ghost player shows off the picked mode. -->
+        <p class="aim-demo-tag" id="aimDemoTag" hidden><span class="kc-dot" aria-hidden="true"></span>demo &middot; press start to play</p>
+
         <!-- End of a bots round: the best kills replayed, letterboxed. -->
         <div class="aim-killcam" id="aimKillcam" hidden>
             <div class="kc-bar kc-top">
@@ -81,6 +84,7 @@
                     <div class="aim-pick">
                         <span class="aim-pick-label" id="aimModeLabel">mode</span>
                         <div class="aim-chips" id="aimModes" role="radiogroup" aria-labelledby="aimModeLabel"></div>
+                        <p class="aim-mode-note" id="aimModeNote" aria-live="polite"></p>
                     </div>
                     <!-- Bots mode only: how good the bots are and how many. -->
                     <div class="aim-pick" id="aimBotRow" hidden>
