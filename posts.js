@@ -12,9 +12,11 @@ async function getPosts() {
 }
 
 // Returns null instead of throwing so getPosts can fall through to the seed.
+// Always checked with the server: GitHub Pages lets a browser keep a file for
+// ten minutes, which hid a newly published post for that long.
 async function fetchJSON(url) {
     try {
-        const res = await fetch(url);
+        const res = await fetch(url, { cache: 'no-cache' });
         if (!res.ok) return null;
         const data = await res.json();
         return Array.isArray(data) ? data : null;
