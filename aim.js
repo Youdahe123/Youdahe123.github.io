@@ -4,7 +4,8 @@
 // viewmodel. Thirty seconds, one high score, kept in this browser. three.js
 // does the drawing; the pointer lock, the spawning and the scoring are all here.
 import * as THREE from './vendor/three/three.module.min.js';
-import { createBots, collectColliders, DIFFICULTIES, BOT_COUNTS } from './bots.js';
+import { createBots, collectColliders, DIFFICULTIES, BOT_COUNTS, DUEL_LENGTHS } from './bots.js';
+import { ARENAS } from './arenas.js';
 import { buildSoldier, aimPose, disposeSoldier, LOOK_PARTS, DEFAULT_LOOK, cleanLook, randomLook } from './soldier.js';
 import { mergeGeometries } from './vendor/three/addons/utils/BufferGeometryUtils.js';
 import { GLTFLoader } from './vendor/three/addons/loaders/GLTFLoader.js';
@@ -22,11 +23,14 @@ const SOUND_KEY = 'aim.sound';
 const SENS_KEY = 'aim.sensitivity';
 const RELOAD_KEY = 'aim.reload';
 const AK_MODE_KEY = 'aim.akMode';
+const HAND_KEY = 'aim.hand';
 const EGGS_KEY = 'aim.eggs';
 const MODE_KEY = 'aim.mode';
 const DIFFICULTY_KEY = 'aim.difficulty';
 const BOT_COUNT_KEY = 'aim.botCount';
 const BOTS_BEST_KEY = 'aim.botsBest';
+const DUEL_FIRST_KEY = 'aim.duelFirst';
+const DUEL_RECORD_KEY = 'aim.duelRecord';
 const LOOK_KEY = 'aim.look';
 const BOTS_ROUND_MS = 90000;
 
@@ -104,6 +108,7 @@ const elModes = document.getElementById('aimModes');
 const elBotRow = document.getElementById('aimBotRow');
 const elDifficulty = document.getElementById('aimDifficulty');
 const elBotCount = document.getElementById('aimBotCount');
+const elRounds = document.getElementById('aimRounds');
 const elTargetRow = document.getElementById('aimTargetRow');
 const elScoreLabel = document.getElementById('aimScoreLabel');
 const elAccLabel = document.getElementById('aimAccLabel');
@@ -125,12 +130,19 @@ let renderer, scene, camera, targetGroup;
 const MODES = [
     { id: 'aim', label: 'aim lab', note: 'targets pop up around the room. click as many as you can in 30 seconds. pure speed and accuracy.' },
     { id: 'bots', label: 'bots', note: 'a 90 second deathmatch on a real map. walk with wasd while the bots hunt you and shoot back. most kills wins, and your best ones replay at the end.' },
+    { id: 'duel', label: '1v1', note: 'you against one bot, one life a round, swapping ends each round. win the round by killing it, or on time by having more health left. first to the set number of rounds takes the match.' },
 ];
 let mode = 'aim';
 let bots = null;
 let kills = 0;
 let deaths = 0;
-const botsMode = () => mode === 'bots';
+// 1v1 and deathmatch are both played on foot against bots; most of the game
+// treats them the same.
+const botsMode = () => mode === 'bots' || mode === 'duel';
+const duelMode = () => mode === 'duel';
+let duelFirst = 5;
+// How the last 1v1 went, for the results.
+let duelResult = null;
 
 // The menu's demo: a ghost player behind the menu playing whichever mode is
 // picked, so what each one is shows before you press start. See syncDemo.
@@ -261,6 +273,7 @@ let skyMesh = null;
 let builtWide = false;
 let mapBounds = null;
 let mapColliders = [];
+let mapSpawns = null;
 
 // A texture painted once on a canvas. Every map surface is procedural, so the
 // page ships no image assets for any of this.
@@ -3682,6 +3695,15 @@ function buildAncient(root, opts = {}) {
     return { fog: [0xdfe6d4, 50, 180], halo: 0x2a2f1c, bounds: WIDE_BOUNDS };
 }
 
+// What the hand-built arenas (arenas.js) are made with: this file's bricks,
+// textures and easter eggs.
+const KIT = {
+    FLOOR_Y, GLOW, UNIT_BALL, UNIT_CONE,
+    block, surface, plain, paint, speckle, shared, ground, light, skyDome, sunAndSky,
+    sandstone, crateTexture, glyphs, corrugated, planks, hazard, sprayed, decal, palm, tree,
+    flagWalkable, deco, placeEgg, EGGS,
+};
+
 const MAPS = [
     { id: 'training', bounds: [-18, 18, -18, 18], label: 'training', build: buildRange, defaults: { background: 0x121312, fog: [0x121312, 18, 46], halo: INK } },
     { id: 'dust2', bounds: [-32, 32, -34, 30], label: 'dust ii', build: buildDust2 },
@@ -3690,6 +3712,7 @@ const MAPS = [
     { id: 'nuke', bounds: [-26, 31, -33, 28], label: 'nuke', build: buildNuke },
     { id: 'vertigo', bounds: [-29, 29, -44, 24], label: 'vertigo', build: buildVertigo },
     { id: 'ancient', bounds: [-34, 34, -46, 24], label: 'ancient', build: buildAncient },
+    ...ARENAS.map((a) => ({ id: a.id, label: a.label, bounds: a.bounds, arena: true, build: (root) => a.build(root, KIT) })),
 ];
 
 let mapKind = MAPS[0];
@@ -3729,8 +3752,13 @@ function selectMap(id) {
     scene.fog = settings.fog ? new THREE.Fog(settings.fog[0], settings.fog[1], settings.fog[2]) : null;
     HALO_MATERIAL.color.set(settings.halo ?? INK);
     envUpdate = settings.update || null;
-    // In bots mode this is the ground you walk: where the edges are.
-    if (bots) bots.setBounds(mapBounds);
+    // In bots mode this is the ground you walk: where the edges are, and
+    // where each side starts a 1v1 round.
+    mapSpawns = made.spawns || null;
+    if (bots) {
+        bots.setBounds(mapBounds);
+        bots.setSpawns(mapSpawns);
+    }
 }
 
 /* ---------- the beaver ---------- */
@@ -5118,7 +5146,7 @@ function ejectCasing() {
     slot.mesh.position.copy(portWorld);
     slot.mesh.visible = true;
     slot.born = performance.now();
-    slot.v.set(1.1 + Math.random() * 0.5, 1.0 + Math.random() * 0.5, 0.25 + Math.random() * 0.2);
+    slot.v.set((1.1 + Math.random() * 0.5) * (leftHanded ? -1 : 1), 1.0 + Math.random() * 0.5, 0.25 + Math.random() * 0.2);
     slot.spin.set(Math.random() * 30, Math.random() * 20, 18 + Math.random() * 20);
 }
 
@@ -5525,6 +5553,15 @@ function updateGun(now, dt) {
             twirlTurned.copy(TWIRL_PIVOT).applyQuaternion(gun.quaternion);
             gun.position.add(twirlStill.sub(twirlTurned));
         }
+
+        // Left handed: the whole pose reflected across the middle of the
+        // screen. The model is not mirrored, only where it is held and how it
+        // is angled (reflecting a turn about the vertical plane keeps its
+        // pitch and flips its yaw and roll).
+        if (leftHanded) {
+            gun.position.x = -gun.position.x;
+            gun.rotation.set(gun.rotation.x, -gun.rotation.y, -gun.rotation.z);
+        }
     }
 
     // The revolver's cylinder turns one chamber per shot, quickly but not
@@ -5817,11 +5854,28 @@ function tappedGun(ndc) {
 }
 
 // A shot from the middle of the screen, which is where the crosshair is.
-// The AK switches between full auto and single shot on G. Every other gun is
+// The AK switches between full auto and single shot on B. Every other gun is
 // fixed to what its table entry says.
 let akAuto = true;
 const isAuto = () => (weapon.selectFire ? akAuto : weapon.auto);
 let modeNoteTimer = 0;
+
+// Which side of the screen the gun is held on, flipped with G, the way csgo's
+// left-hand option works. See the end of updateGun.
+let leftHanded = false;
+
+function toggleHand() {
+    leftHanded = !leftHanded;
+    remember(HAND_KEY, leftHanded ? 'left' : 'right');
+    burst({ cutoff: 1400, type: 'bandpass', q: 3, decay: 0.07, volume: 0.2 });
+    // Brought back up from below on the new side, as after a swap.
+    if (running) equipStart = performance.now();
+    if (running) {
+        setNote(leftHanded ? 'left hand' : 'right hand');
+        clearTimeout(modeNoteTimer);
+        modeNoteTimer = setTimeout(() => setNote(''), 1200);
+    }
+}
 
 function toggleFireMode() {
     if (!weapon.selectFire) return;
@@ -6049,7 +6103,12 @@ function startRound() {
     targetGroup.children.forEach(placeTarget);
     targetGroup.visible = !botsMode();
     clearKeys();
-    if (botsMode()) {
+    if (duelMode()) {
+        // The match runs its own clock, round by round; it faces you the
+        // right way as each round starts (onRoundStart).
+        duelResult = null;
+        bots.start({ duel: { first: duelFirst } });
+    } else if (botsMode()) {
         bots.start();
         yaw = Math.random() * Math.PI * 2;
         applyLook();
@@ -6057,7 +6116,7 @@ function startRound() {
 
     running = true;
     fallbackAim = false;
-    endsAt = performance.now() + (botsMode() ? BOTS_ROUND_MS : ROUND_MS);
+    endsAt = duelMode() ? Infinity : performance.now() + (botsMode() ? BOTS_ROUND_MS : ROUND_MS);
     stage.classList.add('is-running');
     panel.hidden = true;
     hideSave();
@@ -6139,6 +6198,10 @@ function endRound() {
 }
 
 function finishBotsRound() {
+    if (duelMode()) {
+        finishDuel();
+        return;
+    }
     panel.hidden = false;
     setShowcase(true);
     const top = botsBest();
@@ -6152,6 +6215,39 @@ function finishBotsRound() {
     elStatValue.textContent = String(kills);
     elStatNote.textContent = `${deaths} ${deaths === 1 ? 'death' : 'deaths'} · ${headshotRate()}% headshots · ${accuracy()}% accuracy · best ${Math.max(top, kills)}`;
     elStart.textContent = 'go again';
+    setNote('');
+    lastRun = null;
+    lockPicks(false);
+    elSaveOpen.hidden = true;
+}
+
+function duelRecord() {
+    try {
+        const r = JSON.parse(recall(DUEL_RECORD_KEY) || '{}');
+        return { won: Number(r.won) || 0, played: Number(r.played) || 0 };
+    } catch {
+        return { won: 0, played: 0 };
+    }
+}
+
+function finishDuel() {
+    panel.hidden = false;
+    setShowcase(true);
+    const r = duelResult;
+    const record = duelRecord();
+    if (r) {
+        record.played++;
+        if (r.won) record.won++;
+        remember(DUEL_RECORD_KEY, JSON.stringify(record));
+    }
+    bots.stop();
+    targetGroup.visible = true;
+    applyLook();
+    elTitle.textContent = !r ? '1v1' : r.won ? 'victory' : 'defeat';
+    elStatLabel.textContent = r ? `vs ${r.name.toLowerCase()} · ${bots.difficulty().label}` : 'rounds';
+    elStatValue.textContent = r ? `${r.you} : ${r.them}` : '0 : 0';
+    elStatNote.textContent = `${kills} ${kills === 1 ? 'kill' : 'kills'} · ${headshotRate()}% headshots · ${accuracy()}% accuracy · ${record.won} of ${record.played} matches won`;
+    elStart.textContent = r?.won ? 'run it back' : 'rematch';
     setNote('');
     lastRun = null;
     lockPicks(false);
@@ -6193,6 +6289,13 @@ function accuracy() {
 }
 
 function updateHud() {
+    if (duelMode()) {
+        const d = bots.duel;
+        elScore.textContent = String(d?.you ?? 0);
+        elAcc.textContent = String(d?.them ?? 0);
+        elAccLabel.textContent = d ? d.name.toLowerCase() : 'bot';
+        return;
+    }
     if (botsMode()) {
         elScore.textContent = String(kills);
         elAcc.textContent = String(deaths);
@@ -6261,9 +6364,14 @@ function botsBest() {
 
 // The start panel's big number and labels follow the mode.
 function showModeStats() {
-    elScoreLabel.textContent = botsMode() ? 'kills' : 'hits';
-    elAccLabel.textContent = botsMode() ? 'deaths' : 'accuracy';
-    if (botsMode()) {
+    elScoreLabel.textContent = duelMode() ? 'you' : botsMode() ? 'kills' : 'hits';
+    elAccLabel.textContent = duelMode() ? 'bot' : botsMode() ? 'deaths' : 'accuracy';
+    if (duelMode()) {
+        const r = duelRecord();
+        elStatLabel.textContent = 'matches won';
+        elStatValue.textContent = String(r.won);
+        elStatNote.textContent = r.played ? `first to ${duelFirst} · ${r.won} of ${r.played} won` : `first to ${duelFirst} · no matches yet`;
+    } else if (botsMode()) {
         const top = botsBest();
         elStatLabel.textContent = 'most kills';
         elStatValue.textContent = String(top);
@@ -6283,16 +6391,18 @@ function demoWanted() {
 
 // Started and stopped from the frame loop, so every way into or out of the
 // menu (a round ending, a pause, a mode or map change) is covered.
+const demoKind = () => (botsMode() ? 'bots' : 'aim');
+
 function syncDemo() {
     const want = demoWanted();
-    if (want && demo.on && demo.kind !== mode) stopDemo();
+    if (want && demo.on && demo.kind !== demoKind()) stopDemo();
     if (want && !demo.on) startDemo();
     else if (!want && demo.on) stopDemo();
 }
 
 function startDemo() {
     demo.on = true;
-    demo.kind = mode;
+    demo.kind = demoKind();
     demo.target = null;
     demo.nextShot = performance.now() + 700;
     demo.wanderUntil = 0;
@@ -6452,7 +6562,11 @@ function loop(now) {
     if (running) tickAmmo(now);
     if (running && triggerHeld && isAuto()) fire();
 
-    if (running) {
+    if (running && duelMode()) {
+        const d = bots.duel;
+        const left = d ? (d.timeLeft / 1000).toFixed(1) : '';
+        if (elTime.textContent !== left) elTime.textContent = left;
+    } else if (running) {
         const left = Math.max(0, endsAt - now);
         elTime.textContent = (left / 1000).toFixed(1);
         if (left <= 0) endRound();
@@ -6486,11 +6600,18 @@ function pause(message) {
     clearKeys();
     elHealth.hidden = true;
     elTitle.textContent = 'paused';
-    elStatLabel.textContent = botsMode() ? 'kills so far' : 'hits so far';
-    elStatValue.textContent = String(botsMode() ? kills : hits);
-    elStatNote.textContent = botsMode()
-        ? `${(remainingMs / 1000).toFixed(1)}s left · ${deaths} ${deaths === 1 ? 'death' : 'deaths'}`
-        : `${(remainingMs / 1000).toFixed(1)}s left · best ${best}`;
+    if (duelMode()) {
+        const d = bots.duel;
+        elStatLabel.textContent = d ? `round ${d.round} · first to ${d.first}` : 'score';
+        elStatValue.textContent = d ? `${d.you} : ${d.them}` : '0 : 0';
+        elStatNote.textContent = d ? `you against ${d.name.toLowerCase()} · ${(d.timeLeft / 1000).toFixed(1)}s left in the round` : '';
+    } else {
+        elStatLabel.textContent = botsMode() ? 'kills so far' : 'hits so far';
+        elStatValue.textContent = String(botsMode() ? kills : hits);
+        elStatNote.textContent = botsMode()
+            ? `${(remainingMs / 1000).toFixed(1)}s left · ${deaths} ${deaths === 1 ? 'death' : 'deaths'}`
+            : `${(remainingMs / 1000).toFixed(1)}s left · best ${best}`;
+    }
     elStart.textContent = 'resume';
     hideSave();
     lockPicks(true);
@@ -6563,7 +6684,7 @@ function buildChips(container, options, selected, onPick) {
 
 // Mid-round the loadout is locked, so a paused run cannot swap guns halfway.
 function lockPicks(locked) {
-    for (const chip of [...elModes.children, ...elDifficulty.children, ...elBotCount.children, ...elGuns.children, ...elReloads.children, ...elTargets.children, ...elMaps.children]) chip.disabled = locked;
+    for (const chip of [...elModes.children, ...elDifficulty.children, ...elBotCount.children, ...elRounds.children, ...elGuns.children, ...elReloads.children, ...elTargets.children, ...elMaps.children]) chip.disabled = locked;
 }
 
 /* ---------- your character ---------- */
@@ -6715,17 +6836,17 @@ function updateHint() {
         elHint.textContent = `tap the ${targetKind.id === 'bullseye' ? 'targets' : `${targetKind.label}s`} · tap the gun to inspect it`;
     } else {
         if (weapon.melee) {
-            elHint.textContent = `click to slash · right click to stab · f to inspect · 1 for your gun${botsMode() ? ' · wasd to move' : ''} · esc to pause`;
+            elHint.textContent = `click to slash · right click to stab · f to inspect · 1 for your gun${botsMode() ? ' · wasd to move' : ''} · g to switch hands · esc to pause`;
             return;
         }
         const fire = weapon.selectFire
-            ? (akAuto ? 'hold to spray · g for single shot' : 'click to fire · g for full auto')
+            ? (akAuto ? 'hold to spray · b for single shot' : 'click to fire · b for full auto')
             : isAuto() ? 'hold to spray' : weapon.scope ? 'click to fire · right click to scope' : 'click to fire';
         if (botsMode()) {
-            elHint.textContent = `wasd to move · space to jump · shift to walk · ctrl or c to crouch · ${fire}${reloadsOn ? ' · r to reload' : ''} · 2 for the knife · esc to pause`;
+            elHint.textContent = `wasd to move · space to jump · shift to walk · ctrl or c to crouch · ${fire}${reloadsOn ? ' · r to reload' : ''} · 2 for the knife · g to switch hands · esc to pause`;
             return;
         }
-        elHint.textContent = `${fire} · ${reloadsOn ? 'r to reload · ' : ''}f to inspect · 2 for the knife · esc to pause`;
+        elHint.textContent = `${fire} · ${reloadsOn ? 'r to reload · ' : ''}f to inspect · 2 for the knife · g to switch hands · esc to pause`;
     }
 }
 
@@ -6856,6 +6977,11 @@ elStart.addEventListener('click', () => {
 });
 
 elReset.addEventListener('click', () => {
+    if (duelMode()) {
+        remember(DUEL_RECORD_KEY, '{}');
+        showModeStats();
+        return;
+    }
     if (botsMode()) {
         remember(BOTS_BEST_KEY, '0');
         showModeStats();
@@ -7107,7 +7233,9 @@ document.addEventListener('keydown', (event) => {
     if ((event.key === 'r' || event.key === 'R') && running && !event.repeat) startReload();
     if (event.code === 'Digit1' && !event.repeat) equip(primaryId);
     if (event.code === 'Digit2' && !event.repeat) equip('knife');
-    if (event.code === 'KeyG' && !event.repeat && !(event.target instanceof HTMLInputElement)) toggleFireMode();
+    if (event.target instanceof HTMLInputElement || event.repeat) return;
+    if (event.code === 'KeyB') toggleFireMode();
+    if (event.code === 'KeyG') toggleHand();
 });
 
 // Switching tabs stops requestAnimationFrame, so a round left in the
@@ -7157,6 +7285,7 @@ try {
     foundEggs = new Set();
 }
 akAuto = recall(AK_MODE_KEY) !== 'semi';
+leftHanded = recall(HAND_KEY) === 'left';
 buildChips(elReloads, RELOAD_MODES, reloadsOn ? 'on' : 'off', (id) => {
     reloadsOn = id === 'on';
     remember(RELOAD_KEY, id);
@@ -7216,6 +7345,24 @@ bots = createBots({
         killfeed: document.getElementById('aimKillfeed'),
         damage: document.getElementById('aimDamage'),
         death: document.getElementById('aimDeath'),
+        round: document.getElementById('aimRound'),
+        roundTitle: document.getElementById('aimRoundTitle'),
+        roundSub: document.getElementById('aimRoundSub'),
+    },
+    // 1v1: a new round, facing the middle of the map.
+    onRoundStart({ yaw: y }) {
+        yaw = y;
+        pitch = 0;
+        applyLook();
+        triggerHeld = false;
+        updateHud();
+    },
+    onDuelRound() {
+        updateHud();
+    },
+    onDuelEnd(result) {
+        duelResult = result;
+        if (running) endRound();
     },
     onKill() {
         kills++;
@@ -7237,6 +7384,7 @@ bots = createBots({
 });
 bots.setBounds(mapBounds || mapKind.bounds);
 bots.setColliders(mapColliders);
+bots.setSpawns(mapSpawns);
 // The furniture models arrive a moment after the page; if the bots map was
 // already built with stand-ins, build it again with the real thing, unless
 // a round is on.
@@ -7247,17 +7395,27 @@ kenneyReady.then(() => {
 // Mode, difficulty and bot count. Bots mode needs a keyboard, so phones only
 // get the aim trainer.
 function applyMode() {
-    elTitle.textContent = botsMode() ? 'bots' : 'aim trainer';
+    elTitle.textContent = duelMode() ? '1v1' : botsMode() ? 'bots' : 'aim trainer';
     elModeNote.textContent = MODES.find((m) => m.id === mode).note;
     updateEggLine();
+    // A 1v1 wants a hand-built arena, not a sprawling city.
+    if (duelMode() && !mapKind.arena) {
+        const arena = MAPS.find((m) => m.arena);
+        for (const chip of elMaps.children) chip.setAttribute('aria-checked', String(chip.textContent === arena.label));
+        remember(MAP_KEY, arena.id);
+        selectMap(arena.id);
+    }
     // Bots mode plays on the wider build of the map.
     if (builtWide !== botsMode()) selectMap(mapKind.id);
     elBotRow.hidden = !botsMode();
+    elBotCount.hidden = duelMode();
+    elRounds.hidden = !duelMode();
     elTargetRow.hidden = botsMode();
     showModeStats();
     updateHint();
 }
-mode = !touchOnly && recall(MODE_KEY) === 'bots' ? 'bots' : 'aim';
+const savedMode = recall(MODE_KEY);
+mode = !touchOnly && (savedMode === 'bots' || savedMode === 'duel') ? savedMode : 'aim';
 elModes.closest('.aim-pick').hidden = touchOnly;
 buildChips(elModes, MODES, mode, (id) => {
     mode = id;
@@ -7275,6 +7433,13 @@ bots.setCount(Number(savedCount.id));
 buildChips(elBotCount, BOT_COUNTS, savedCount.id, (id) => {
     bots.setCount(Number(id));
     remember(BOT_COUNT_KEY, id);
+});
+const savedFirst = DUEL_LENGTHS.find((c) => c.id === recall(DUEL_FIRST_KEY)) || DUEL_LENGTHS[1];
+duelFirst = Number(savedFirst.id);
+buildChips(elRounds, DUEL_LENGTHS, savedFirst.id, (id) => {
+    duelFirst = Number(id);
+    remember(DUEL_FIRST_KEY, id);
+    showModeStats();
 });
 
 elStart.disabled = false;

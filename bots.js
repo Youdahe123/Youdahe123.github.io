@@ -8,11 +8,21 @@
 import * as THREE from './vendor/three/three.module.min.js';
 import { buildSoldier, aimPose, disposeSoldier } from './soldier.js';
 
+// `run` is top speed on foot (you run at 21). `smart` is how often a bot plays
+// like a person: stopping dead to shoot, crouch spraying at range, jump
+// peeking, sneaking up on a sound, falling back to cover to reload.
 export const DIFFICULTIES = [
-    { id: 'easy', label: 'easy', reaction: 950, accuracy: 0.14, fireGap: 380, speed: 9, turn: 2.2, headshot: 0.03 },
-    { id: 'normal', label: 'normal', reaction: 600, accuracy: 0.24, fireGap: 240, speed: 11, turn: 3.4, headshot: 0.07 },
-    { id: 'hard', label: 'hard', reaction: 360, accuracy: 0.36, fireGap: 160, speed: 13, turn: 5, headshot: 0.12 },
-    { id: 'expert', label: 'expert', reaction: 200, accuracy: 0.5, fireGap: 120, speed: 15, turn: 7.5, headshot: 0.2 },
+    { id: 'easy', label: 'easy', reaction: 950, accuracy: 0.14, fireGap: 380, run: 15, turn: 2.2, headshot: 0.03, smart: 0.2 },
+    { id: 'normal', label: 'normal', reaction: 600, accuracy: 0.24, fireGap: 240, run: 17, turn: 3.4, headshot: 0.07, smart: 0.45 },
+    { id: 'hard', label: 'hard', reaction: 360, accuracy: 0.36, fireGap: 160, run: 19, turn: 5, headshot: 0.12, smart: 0.7 },
+    { id: 'expert', label: 'expert', reaction: 200, accuracy: 0.5, fireGap: 120, run: 20, turn: 7.5, headshot: 0.2, smart: 0.9 },
+];
+
+// 1v1: first to this many rounds takes the match.
+export const DUEL_LENGTHS = [
+    { id: '3', label: 'first to 3' },
+    { id: '5', label: 'first to 5' },
+    { id: '8', label: 'first to 8' },
 ];
 
 export const BOT_COUNTS = [
@@ -43,6 +53,17 @@ const JUMP = 22;
 const STEP = 1.1;
 const RESPAWN_MS = 3000;
 const BOT_RESPAWN_MS = 4500;
+// The highest ledge a jump gets you onto.
+const JUMP_UP = 3.2;
+// A bot's ak: thirty rounds, then a reload it would rather do behind a wall.
+const MAG = 30;
+const RELOAD_MS = 2400;
+// 1v1 rounds: a freeze to get your bearings, the round, and a pause after.
+const DUEL_FREEZE_MS = 3000;
+const DUEL_ROUND_MS = 75000;
+const DUEL_AFTER_MS = 3200;
+// The walk grid the bots find their way round the map on.
+const CELL = 2;
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -73,13 +94,14 @@ export function collectColliders(envRoot, floorY) {
         if (!walkable && (box.min.y > floorY + 5 || box.max.y < floorY + 1.2)) return;
         colliders.push({
             minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z,
-            minY: box.min.y, top: box.max.y,
+            minY: box.min.y, top: box.max.y, walkable: !!walkable,
         });
     });
     return colliders;
 }
 const easeOut = (t) => 1 - Math.pow(1 - clamp(t, 0, 1), 3);
 const rand = (lo, hi) => lo + Math.random() * (hi - lo);
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const UP = new THREE.Vector3(0, 1, 0);
 
 export function createBots(ctx) {
@@ -95,6 +117,10 @@ export function createBots(ctx) {
     let active = false;
     // The menu's demo: a ghost player who cannot be hurt and scores nothing.
     let demoMode = false;
+    // Where each side starts a 1v1 round, if the map says: two lists of [x, z].
+    let spawns = null;
+    // The 1v1 match, while one is on. See startDuelRound.
+    let duel = null;
 
     const player = {
         vel: new THREE.Vector3(),
@@ -114,6 +140,7 @@ export function createBots(ctx) {
 
     function setColliders(list) {
         colliders = list || [];
+        navDirty = true;
     }
 
     // The nearest collision box a ray reaches within `far`, with the point and
@@ -147,11 +174,18 @@ export function createBots(ctx) {
 
     // Circle-versus-box in the ground plane. Things low enough to step onto
     // raise the ground instead of blocking; everything else pushes out.
+    // Anything starting well above the feet is a roof or a tunnel's ceiling:
+    // walked under, and the lowest one overhead is left in `ceiling` for a
+    // jump to bump its head on.
+    let ceiling = Infinity;
     function collide(pos, vel, radius, feet) {
         let ground = floorY;
+        ceiling = Infinity;
         for (const c of colliders) {
-            // Entirely over your head (a roof, a landing above): walk under it.
-            if (c.minY > feet + EYE + 0.6) continue;
+            if (c.minY > feet + 5) {
+                if (pos.x > c.minX && pos.x < c.maxX && pos.z > c.minZ && pos.z < c.maxZ) ceiling = Math.min(ceiling, c.minY);
+                continue;
+            }
             const cx = clamp(pos.x, c.minX, c.maxX);
             const cz = clamp(pos.z, c.minZ, c.maxZ);
             let dx = pos.x - cx;
@@ -197,22 +231,328 @@ export function createBots(ctx) {
             && x + radius > c.minX && x - radius < c.maxX && z + radius > c.minZ && z - radius < c.maxZ);
     }
 
-    // A free spot, as far from the given points as a few tries can find.
+    /* ---------- the walk grid: how the bots get around ---------- */
+
+    // The map in 2-unit cells. Each cell has a ground height (the floor, or
+    // the top of a crate, a stair or a platform it sits on) and is open if a
+    // bot could stand in the middle of it without touching anything taller
+    // than a step. A bot can walk to a neighbour a step up or down, jump up
+    // to one a ledge higher, and drop off anything. Built once per map, the
+    // first time the bots need it.
+    let nav = null;
+    let navDirty = true;
+    const NEIGHBOURS = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+
+    function ensureNav() {
+        if (navDirty || !nav) buildNav();
+        return nav;
+    }
+
+    function buildNav() {
+        navDirty = false;
+        const [x0, x1, z0, z1] = bounds;
+        const nx = Math.max(1, Math.floor((x1 - x0) / CELL));
+        const nz = Math.max(1, Math.floor((z1 - z0) / CELL));
+        const n = nx * nz;
+        const h = new Float32Array(n);
+        const open = new Uint8Array(n);
+
+        // Colliders sorted into coarse buckets, so each cell only tests the
+        // few that are anywhere near it.
+        const BK = 8;
+        const bx = Math.ceil((x1 - x0) / BK) + 1;
+        const bz = Math.ceil((z1 - z0) / BK) + 1;
+        const buckets = Array.from({ length: bx * bz }, () => []);
+        for (const c of colliders) {
+            const i0 = clamp(Math.floor((c.minX - 2 - x0) / BK), 0, bx - 1);
+            const i1 = clamp(Math.floor((c.maxX + 2 - x0) / BK), 0, bx - 1);
+            const j0 = clamp(Math.floor((c.minZ - 2 - z0) / BK), 0, bz - 1);
+            const j1 = clamp(Math.floor((c.maxZ + 2 - z0) / BK), 0, bz - 1);
+            for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) buckets[j * bx + i].push(c);
+        }
+
+        const R = BOT_RADIUS + 0.2;
+        for (let j = 0; j < nz; j++) {
+            for (let i = 0; i < nx; i++) {
+                const x = x0 + (i + 0.5) * CELL;
+                const z = z0 + (j + 0.5) * CELL;
+                const near = buckets[Math.floor((z - z0) / BK) * bx + Math.floor((x - x0) / BK)];
+                let H = floorY;
+                let tall = false;
+                for (const c of near) {
+                    if (c.minY > floorY + 1 || x <= c.minX || x >= c.maxX || z <= c.minZ || z >= c.maxZ) continue;
+                    if (c.top > H) {
+                        H = c.top;
+                        // Inside a wall or a building, not on top of something.
+                        tall = !c.walkable && c.top - floorY > 6.5;
+                    }
+                }
+                const k = j * nx + i;
+                h[k] = H;
+                if (tall) continue;
+                let ok = true;
+                for (const c of near) {
+                    if (c.minY > H + 5 || c.top <= H + STEP) continue;
+                    const cx = clamp(x, c.minX, c.maxX);
+                    const cz = clamp(z, c.minZ, c.maxZ);
+                    if ((x - cx) ** 2 + (z - cz) ** 2 < R * R) {
+                        ok = false;
+                        break;
+                    }
+                }
+                open[k] = ok ? 1 : 0;
+            }
+        }
+        nav = { x0, z0, nx, nz, n, h, open };
+
+        // The biggest patch you can get round both ways is the map; spawns
+        // and wandering stay on it, so no one starts in a sealed-off corner.
+        const comp = new Int32Array(n).fill(-1);
+        const queue = new Int32Array(n);
+        let best = -1;
+        let bestSize = 0;
+        for (let s = 0, id = 0; s < n; s++) {
+            if (!open[s] || comp[s] >= 0) continue;
+            let head = 0;
+            let tail = 0;
+            queue[tail++] = s;
+            comp[s] = id;
+            while (head < tail) {
+                const a = queue[head++];
+                for (const [di, dj] of NEIGHBOURS) {
+                    const b = step(a, di, dj);
+                    if (b < 0 || comp[b] >= 0 || Math.abs(h[b] - h[a]) > JUMP_UP) continue;
+                    comp[b] = id;
+                    queue[tail++] = b;
+                }
+            }
+            if (tail > bestSize) {
+                bestSize = tail;
+                best = id;
+            }
+            id++;
+        }
+        nav.comp = comp;
+        nav.main = best;
+        nav.cells = [];
+        nav.ground = [];
+        for (let k = 0; k < n; k++) {
+            if (comp[k] !== best) continue;
+            nav.cells.push(k);
+            if (h[k] <= floorY + 0.5) nav.ground.push(k);
+        }
+        nav.g = new Float32Array(n);
+        nav.from = new Int32Array(n);
+        nav.seen = new Uint32Array(n);
+        nav.shut = new Uint32Array(n);
+        nav.stamp = 0;
+    }
+
+    // The neighbour of cell a one over, if it is open and a bot can move
+    // there: not too high to jump, and no cutting a corner past a wall.
+    function step(a, di, dj) {
+        const { nx, nz, open } = nav;
+        const i = (a % nx) + di;
+        const j = Math.floor(a / nx) + dj;
+        if (i < 0 || j < 0 || i >= nx || j >= nz) return -1;
+        const b = j * nx + i;
+        if (!open[b]) return -1;
+        if (di && dj && (!open[a + di] || !open[a + dj * nx])) return -1;
+        return b;
+    }
+
+    function cellAt(x, z) {
+        const i = Math.floor((x - nav.x0) / CELL);
+        const j = Math.floor((z - nav.z0) / CELL);
+        if (i < 0 || j < 0 || i >= nav.nx || j >= nav.nz) return -1;
+        return j * nav.nx + i;
+    }
+
+    // The open cell nearest a point, for when the point itself is up against
+    // a wall. Prefers one at about the same height.
+    function openNear(x, z, y = floorY) {
+        const k = cellAt(clamp(x, bounds[0], bounds[1] - 0.01), clamp(z, bounds[2], bounds[3] - 0.01));
+        if (k < 0) return -1;
+        if (nav.open[k] && Math.abs(nav.h[k] - y) < JUMP_UP) return k;
+        const ci = k % nav.nx;
+        const cj = Math.floor(k / nav.nx);
+        let best = -1;
+        let bestD = Infinity;
+        for (let r = 1; r <= 4 && best < 0; r++) {
+            for (let dj = -r; dj <= r; dj++) {
+                for (let di = -r; di <= r; di++) {
+                    if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
+                    const i = ci + di;
+                    const j = cj + dj;
+                    if (i < 0 || j < 0 || i >= nav.nx || j >= nav.nz) continue;
+                    const b = j * nav.nx + i;
+                    if (!nav.open[b]) continue;
+                    const d = di * di + dj * dj + Math.abs(nav.h[b] - y);
+                    if (d < bestD) {
+                        bestD = d;
+                        best = b;
+                    }
+                }
+            }
+        }
+        return best >= 0 ? best : nav.open[k] ? k : -1;
+    }
+
+    const cellPoint = (k) => ({
+        x: nav.x0 + ((k % nav.nx) + 0.5) * CELL,
+        z: nav.z0 + (Math.floor(k / nav.nx) + 0.5) * CELL,
+        h: nav.h[k],
+    });
+
+    // A* over the grid, then pulled straight wherever a straight line walks.
+    // A list of points to head for, or null if there is no way there.
+    const heap = [];
+    function findPath(from, to) {
+        ensureNav();
+        const a = openNear(from.x, from.z, from.y);
+        const b = openNear(to.x, to.z, to.y ?? floorY);
+        if (a < 0 || b < 0) return null;
+        const { nx, h, g, seen, shut } = nav;
+        const stamp = ++nav.stamp;
+        const bi = b % nx;
+        const bj = Math.floor(b / nx);
+        const guess = (k) => {
+            const di = Math.abs((k % nx) - bi);
+            const dj = Math.abs(Math.floor(k / nx) - bj);
+            return Math.max(di, dj) + 0.414 * Math.min(di, dj);
+        };
+        heap.length = 0;
+        g[a] = 0;
+        seen[a] = stamp;
+        nav.from[a] = -1;
+        push(heap, guess(a), a);
+        let found = false;
+        let budget = 9000;
+        while (heap.length && budget-- > 0) {
+            const k = pop(heap);
+            if (shut[k] === stamp) continue;
+            shut[k] = stamp;
+            if (k === b) {
+                found = true;
+                break;
+            }
+            for (const [di, dj] of NEIGHBOURS) {
+                const m = step(k, di, dj);
+                if (m < 0 || shut[m] === stamp) continue;
+                const dh = h[m] - h[k];
+                if (dh > JUMP_UP) continue;
+                // Jumps and drops cost a little more than walking.
+                const cost = (di && dj ? 1.414 : 1) + (dh > STEP ? 1.5 : 0) + (dh < -STEP ? 0.6 : 0);
+                const next = g[k] + cost;
+                if (seen[m] === stamp && next >= g[m]) continue;
+                seen[m] = stamp;
+                g[m] = next;
+                nav.from[m] = k;
+                push(heap, next + guess(m), m);
+            }
+        }
+        if (!found) return null;
+        const cells = [];
+        for (let k = b; k >= 0; k = nav.from[k]) cells.push(k);
+        cells.reverse();
+
+        const out = [];
+        let k = 0;
+        while (k < cells.length - 1) {
+            let j = Math.min(cells.length - 1, k + 24);
+            while (j > k + 1 && !straight(cells[k], cells[j])) j--;
+            out.push(cellPoint(cells[j]));
+            k = j;
+        }
+        if (!out.length) out.push(cellPoint(b));
+        return out;
+    }
+
+    // Can a bot just walk from one cell to the other in a line: open all the
+    // way, and never more than a step up or down at a time.
+    function straight(a, b) {
+        const pa = cellPoint(a);
+        const pb = cellPoint(b);
+        const len = Math.hypot(pb.x - pa.x, pb.z - pa.z);
+        const n = Math.ceil(len / (CELL * 0.4));
+        let last = pa.h;
+        for (let i = 1; i <= n; i++) {
+            const t = i / n;
+            const k = cellAt(pa.x + (pb.x - pa.x) * t, pa.z + (pb.z - pa.z) * t);
+            if (k < 0 || !nav.open[k] || Math.abs(nav.h[k] - last) > STEP) return false;
+            last = nav.h[k];
+        }
+        return true;
+    }
+
+    function push(q, f, k) {
+        q.push([f, k]);
+        let i = q.length - 1;
+        while (i > 0) {
+            const p = (i - 1) >> 1;
+            if (q[p][0] <= q[i][0]) break;
+            [q[p], q[i]] = [q[i], q[p]];
+            i = p;
+        }
+    }
+
+    function pop(q) {
+        const top = q[0][1];
+        const last = q.pop();
+        if (q.length) {
+            q[0] = last;
+            let i = 0;
+            for (;;) {
+                const l = i * 2 + 1;
+                const r = l + 1;
+                let m = i;
+                if (l < q.length && q[l][0] < q[m][0]) m = l;
+                if (r < q.length && q[r][0] < q[m][0]) m = r;
+                if (m === i) break;
+                [q[m], q[i]] = [q[i], q[m]];
+                i = m;
+            }
+        }
+        return top;
+    }
+
+    // A free spot on the ground, as far from the given points as a few tries
+    // can find.
     function spawnPoint(awayFrom) {
+        ensureNav();
         let best = null;
         let bestScore = -1;
-        for (let i = 0; i < 40; i++) {
-            const x = rand(bounds[0] + 3, bounds[1] - 3);
-            const z = rand(bounds[2] + 3, bounds[3] - 3);
-            if (blockedAt(x, z, 2)) continue;
+        const pool = nav.ground.length ? nav.ground : nav.cells;
+        for (let i = 0; i < 50; i++) {
+            let x;
+            let z;
+            let y = floorY;
+            if (pool.length) {
+                const p = cellPoint(pool[Math.floor(Math.random() * pool.length)]);
+                x = p.x;
+                z = p.z;
+                y = p.h;
+            } else {
+                x = rand(bounds[0] + 3, bounds[1] - 3);
+                z = rand(bounds[2] + 3, bounds[3] - 3);
+                if (blockedAt(x, z, 2)) continue;
+            }
             const score = Math.min(200, ...awayFrom.map((p) => Math.hypot(p.x - x, p.z - z)));
             if (score > bestScore) {
                 bestScore = score;
-                best = new THREE.Vector3(x, floorY, z);
+                best = new THREE.Vector3(x, y, z);
             }
             if (score > 55) break;
         }
         return best || new THREE.Vector3(0, floorY, 0);
+    }
+
+    // Somewhere on the map to walk to.
+    function randomSpot() {
+        ensureNav();
+        if (!nav.cells.length) return new THREE.Vector3(0, floorY, 0);
+        const p = cellPoint(nav.cells[Math.floor(Math.random() * nav.cells.length)]);
+        return new THREE.Vector3(p.x, p.h, p.z);
     }
 
     const sightRay = new THREE.Ray();
@@ -239,18 +579,44 @@ export function createBots(ctx) {
             heading: 0,
             health: 100,
             alive: true,
-            state: 'roam',
-            waypoint: null,
+            // patrol: wandering the map. hunt: going to where you were seen
+            // or heard. fight: you are in sight. cover: backing off round a
+            // corner to reload or heal up, then holding the angle.
+            mode: 'patrol',
+            path: null,
+            pathI: 0,
+            goal: new THREE.Vector3(),
             nextThink: 0,
             sees: false,
+            seesHead: true,
             spottedAt: 0,
-            lastSeen: 0,
+            lastSeen: -1e9,
             lastKnown: new THREE.Vector3(),
+            heardAt: -1e9,
+            sneak: false,
+            holdUntil: 0,
+            holdYaw: 0,
+            glanceUntil: 0,
+            glanceYaw: 0,
             nextShot: 0,
             burstLeft: 0,
+            inBurst: false,
+            mag: MAG,
+            reloadUntil: 0,
+            wantsCover: false,
+            tookCover: false,
+            // How it moves in a fight, picked afresh every so often.
             strafe: 0,
-            strafeUntil: 0,
+            advance: 0,
+            crouchFight: false,
+            brake: false,
+            moveUntil: 0,
+            onGround: true,
+            jump: false,
+            crouch: 0,
+            air: 0,
             stuckCheck: 0,
+            stuck: 0,
             stuckFrom: new THREE.Vector3(),
             phase: Math.random() * 6,
             flinchAt: 0,
@@ -263,17 +629,30 @@ export function createBots(ctx) {
         return bot;
     }
 
-    function spawnBot(bot) {
+    function spawnBot(bot, at) {
         const others = [camera.position, ...bots.filter((b) => b !== bot && b.alive).map((b) => b.pos)];
-        bot.pos.copy(spawnPoint(others));
+        bot.pos.copy(at || spawnPoint(others));
         bot.heading = Math.atan2(camera.position.x - bot.pos.x, camera.position.z - bot.pos.z) + rand(-1.2, 1.2);
         bot.health = 100;
         bot.alive = true;
-        bot.state = 'roam';
-        bot.waypoint = null;
+        bot.mode = 'patrol';
+        bot.path = null;
         bot.fall = null;
         bot.sees = false;
+        bot.lastSeen = -1e9;
         bot.burstLeft = 0;
+        bot.inBurst = false;
+        bot.mag = MAG;
+        bot.reloadUntil = 0;
+        bot.wantsCover = false;
+        bot.tookCover = false;
+        bot.holdUntil = 0;
+        bot.vel.set(0, 0, 0);
+        bot.onGround = true;
+        bot.jump = false;
+        bot.crouch = 0;
+        bot.air = 0;
+        bot.stuck = 0;
         bot.rig.body.quaternion.identity();
         bot.rig.body.visible = true;
         // The dropped rifle goes back in its hands.
@@ -508,6 +887,7 @@ export function createBots(ctx) {
 
         player.alive = false;
         player.deadAt = performance.now();
+        player.deadFeet = camera.position.y - player.eye;
         player.killer = bot.name;
         stats.deaths++;
         feed(bot.name, 'ak-47', 'you', headshot, false);
@@ -531,7 +911,8 @@ export function createBots(ctx) {
     function killBot(bot, point, dir, headshot, weaponLabel) {
         bot.alive = false;
         bot.deadAt = performance.now();
-        bot.respawnAt = bot.deadAt + BOT_RESPAWN_MS;
+        // In a 1v1 the next round brings it back, not a timer.
+        bot.respawnAt = duel ? Infinity : bot.deadAt + BOT_RESPAWN_MS;
         const flat = tmpA.copy(dir).setY(0);
         if (flat.lengthSq() < 1e-6) flat.set(0, 0, 1);
         flat.normalize();
@@ -580,6 +961,8 @@ export function createBots(ctx) {
         shotRay.ray.copy(ray);
         shotRay.far = reach;
         const wall = rayHitsWorld(ray, reach);
+        // A gunshot carries across the map; a knife hardly at all.
+        noise(camera.position, opts.melee ? 18 : 150);
         let best = null;
         for (const bot of bots) {
             if (!bot.alive) continue;
@@ -607,9 +990,16 @@ export function createBots(ctx) {
             bot.flinchAt = performance.now();
             spray(hit.point, ray.direction, 7, 8, bloodMat, 0.7, 0.45);
             if (headshot) dink();
-            bot.state = 'fight';
-            bot.spottedAt = Math.min(bot.spottedAt || Infinity, performance.now() - difficulty.reaction * 0.5);
-            bot.lastSeen = performance.now();
+            const now = performance.now();
+            if (bot.mode !== 'fight') {
+                bot.mode = 'fight';
+                bot.spottedAt = now - difficulty.reaction * 0.5;
+                bot.moveUntil = 0;
+            }
+            bot.lastSeen = now;
+            bot.lastKnown.copy(camera.position);
+            // Hurt badly: it may decide to fall back and come again.
+            if (bot.health < 45 && !bot.tookCover && Math.random() < difficulty.smart * 0.7) bot.wantsCover = true;
             return { hit: true, kill: false, headshot };
         }
         if (wall && !opts.melee) {
@@ -627,6 +1017,9 @@ export function createBots(ctx) {
     const botEye = new THREE.Vector3();
     const muzzleWorld = new THREE.Vector3();
     const aimAt = new THREE.Vector3();
+    const probe = new THREE.Vector3();
+
+    const botSpeed = (bot) => Math.hypot(bot.vel.x, bot.vel.z);
 
     function botFire(bot, now, dist) {
         bot.rig.muzzle.getWorldPosition(muzzleWorld);
@@ -636,10 +1029,14 @@ export function createBots(ctx) {
 
         const moving = Math.hypot(player.vel.x, player.vel.z) > WALK + 1;
         const firstShots = now - bot.spottedAt < difficulty.reaction + 250 ? 0.6 : 1;
-        const p = difficulty.accuracy * clamp(1.15 - dist / 120, 0.3, 1) * (moving ? 0.7 : 1) * (player.onGround ? 1 : 0.6) * (player.eye < EYE - 1 ? 0.8 : 1) * firstShots;
+        // Its own feet count too, as they do for you: shooting on the run
+        // or in the air sprays, standing still is steady, crouched steadier.
+        const self = !bot.onGround ? 0.25 : botSpeed(bot) > 7 ? 0.45 : bot.crouch > 0.5 ? 1.15 : 1;
+        const p = difficulty.accuracy * clamp(1.15 - dist / 120, 0.3, 1) * (moving ? 0.7 : 1) * (player.onGround ? 1 : 0.6) * (player.eye < EYE - 1 ? 0.8 : 1) * firstShots * self;
         aimAt.copy(camera.position);
         if (Math.random() < p) {
-            const headshot = Math.random() < difficulty.headshot;
+            // Only your legs showing round a box: no headshot on offer.
+            const headshot = bot.seesHead && Math.random() < difficulty.headshot;
             aimAt.y -= headshot ? 0 : 2;
             tracer(muzzleWorld, aimAt);
             hurtPlayer(headshot ? 111 : rand(22, 31), bot, headshot);
@@ -650,134 +1047,408 @@ export function createBots(ctx) {
             aimAt.z += rand(-2.5, 2.5);
             tracer(muzzleWorld, aimAt);
         }
+        if (--bot.mag <= 0) startReload(bot, now, dist);
     }
 
-    // Somewhere to walk to. Half the time it is roughly where you are, so on a
-    // big map the bots come looking instead of wandering the far corners.
-    function newWaypoint() {
-        const hunt = player.alive && Math.random() < 0.5;
-        for (let i = 0; i < 20; i++) {
-            const x = hunt ? camera.position.x + rand(-25, 25) : rand(bounds[0] + 3, bounds[1] - 3);
-            const z = hunt ? camera.position.z + rand(-25, 25) : rand(bounds[2] + 3, bounds[3] - 3);
-            if (!blockedAt(x, z, 1.6)) return new THREE.Vector3(x, floorY, z);
-        }
-        return new THREE.Vector3(0, floorY, 0);
+    function startReload(bot, now, dist) {
+        bot.reloadUntil = now + RELOAD_MS * rand(0.9, 1.1);
+        bot.burstLeft = 0;
+        bot.inBurst = false;
+        // The mag out and the new one in: a tell, if you are close enough.
+        const v = near(dist, 60);
+        sound.burst({ cutoff: 2400, type: 'bandpass', q: 4, decay: 0.06, volume: 0.22 * v });
+        sound.burst({ at: 0.9, cutoff: 1800, type: 'bandpass', q: 4, decay: 0.08, volume: 0.26 * v });
+        if (!bot.tookCover && Math.random() < 0.3 + difficulty.smart * 0.6) bot.wantsCover = true;
     }
 
     function turnToward(bot, target, rate, dt) {
-        let diff = target - bot.heading;
-        diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+        const diff = wrap(target - bot.heading);
         bot.heading += clamp(diff, -rate * dt, rate * dt);
         return Math.abs(diff);
     }
 
-    function updateBot(bot, now, dt) {
+    function setPath(bot, to) {
+        bot.goal.copy(to);
+        bot.path = findPath(bot.pos, to);
+        bot.pathI = 0;
+        bot.stuck = 0;
+        return !!bot.path;
+    }
+
+    // Somewhere to go. Now and then it is roughly where you are, since on a
+    // big map the bots should come looking instead of wandering the far
+    // corners; in a 1v1 that hunch is vaguer, so it is not a wallhack.
+    function patrol(bot) {
+        bot.mode = 'patrol';
+        bot.sneak = false;
+        const hunch = player.alive && Math.random() < (duel ? 0.35 : 0.45);
+        for (let i = 0; i < 6; i++) {
+            let to;
+            if (hunch) {
+                const spread = duel ? 40 : 28;
+                const k = openNear(camera.position.x + rand(-spread, spread), camera.position.z + rand(-spread, spread));
+                if (k < 0 || nav.comp[k] !== nav.main) continue;
+                const p = cellPoint(k);
+                to = new THREE.Vector3(p.x, p.h, p.z);
+            } else {
+                to = randomSpot();
+            }
+            if (Math.hypot(to.x - bot.pos.x, to.z - bot.pos.z) < 12) continue;
+            if (setPath(bot, to)) return;
+        }
+        bot.path = null;
+    }
+
+    // Go and look where you were last seen or heard. A smart bot walks the
+    // last stretch so its footsteps do not give it away, pre-aiming the spot.
+    function hunt(bot, now) {
+        bot.mode = 'hunt';
+        bot.sneak = Math.random() < difficulty.smart * 0.85;
+        bot.holdUntil = 0;
+        if (!setPath(bot, bot.lastKnown)) patrol(bot);
+    }
+
+    // Round a corner from you, close by: a cell you cannot see from where you
+    // stand. Picked from a handful of tries, nearer and further from you
+    // being better.
+    function findCover(bot) {
+        ensureNav();
+        const here = openNear(bot.pos.x, bot.pos.z, bot.pos.y);
+        if (here < 0) return null;
+        let best = null;
+        let bestScore = Infinity;
+        for (let i = 0; i < 40; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const r = rand(5, 24);
+            const k = cellAt(bot.pos.x + Math.sin(a) * r, bot.pos.z + Math.cos(a) * r);
+            if (k < 0 || !nav.open[k] || nav.comp[k] !== nav.comp[here]) continue;
+            const c = cellPoint(k);
+            probe.set(c.x, c.h + EYE, c.z);
+            if (lineOfSight(camera.position, probe)) continue;
+            const score = r - 0.4 * Math.hypot(c.x - camera.position.x, c.z - camera.position.z);
+            if (score < bestScore) {
+                bestScore = score;
+                best = new THREE.Vector3(c.x, c.h, c.z);
+            }
+        }
+        return best;
+    }
+
+    // Anything you do that makes a sound: footsteps, a shot. Bots in earshot
+    // that are not already on you come to have a look, a rough guess at the
+    // spot, rougher the further off they were.
+    function noise(at, reach) {
+        if (!active || replay) return;
+        const now = performance.now();
+        for (const bot of bots) {
+            if (!bot.alive || bot.mode === 'fight' || bot.mode === 'cover') continue;
+            const d = Math.hypot(at.x - bot.pos.x, at.z - bot.pos.z);
+            if (d > reach) continue;
+            const blur = d * 0.12;
+            bot.lastKnown.set(at.x + rand(-blur, blur), at.y - player.eye, at.z + rand(-blur, blur));
+            if (bot.mode !== 'hunt' || now - bot.heardAt > 1500) hunt(bot, now);
+            bot.heardAt = now;
+        }
+    }
+
+    // Looking about, several times a second rather than every frame.
+    function think(bot, now, dist, toYou) {
+        bot.nextThink = now + rand(100, 180);
+        const d = difficulty;
+        const off = Math.abs(wrap(toYou - bot.heading));
+        const alert = bot.mode === 'fight' || now - bot.lastSeen < 2500;
+        const aware = off < (alert ? 2.2 : 1.3) || dist < 9;
+        let sees = false;
+        if (player.alive && dist < 150 && aware) {
+            bot.seesHead = lineOfSight(botEye, camera.position);
+            sees = bot.seesHead || lineOfSight(botEye, probe.copy(camera.position).setY(camera.position.y - player.eye * 0.55));
+        }
+        bot.sees = sees;
+        if (sees && bot.mode === 'cover' && bot.path) {
+            // Running for cover: keeps running.
+            bot.lastSeen = now;
+            bot.lastKnown.copy(camera.position).setY(camera.position.y - player.eye);
+        } else if (sees) {
+            if (bot.mode !== 'fight') {
+                // Already looking this way (pre-aiming, holding an angle):
+                // quicker on the trigger.
+                const ready = off < 0.35 && (bot.mode === 'hunt' || bot.holdUntil > now);
+                bot.mode = 'fight';
+                bot.spottedAt = now - (ready ? d.reaction * 0.45 : 0);
+                bot.moveUntil = 0;
+                bot.path = null;
+            }
+            bot.lastSeen = now;
+            bot.lastKnown.copy(camera.position).setY(camera.position.y - player.eye);
+        } else if (bot.mode === 'fight' && now - bot.lastSeen > 1400) {
+            hunt(bot, now);
+        }
+
+        // Back off to reload or lick its wounds, once a life.
+        if (bot.wantsCover && (bot.mode === 'fight' || bot.mode === 'hunt')) {
+            bot.wantsCover = false;
+            const spot = findCover(bot);
+            if (spot && setPath(bot, spot)) {
+                bot.mode = 'cover';
+                bot.tookCover = true;
+                bot.holdUntil = 0;
+            }
+        }
+    }
+
+    // How it moves while shooting at you, picked again every half second or
+    // so: strafing, stopping dead for the shot, crouching to spray at range,
+    // pushing when far, the odd jump.
+    function pickFightMove(bot, dist, now) {
+        const d = difficulty;
+        bot.crouchFight = dist > 25 && Math.random() < d.smart * 0.45;
+        bot.strafe = bot.crouchFight && Math.random() < 0.7 ? 0 : Math.random() < 0.5 ? -1 : 1;
+        bot.advance = dist > 55 ? 1 : dist < 9 && Math.random() < 0.4 ? -0.6 : dist < 22 && Math.random() < 0.2 ? 0.7 : 0;
+        bot.brake = Math.random() < 0.25 + d.smart * 0.65;
+        if (!bot.crouchFight && dist < 45 && Math.random() < d.smart * 0.18) bot.jump = true;
+        bot.moveUntil = now + (bot.crouchFight ? rand(900, 1700) : rand(320, 900));
+    }
+
+    function updateBot(bot, now, dt, frozen) {
         const rig = bot.rig;
         if (!bot.alive) {
             ragdoll(bot, now, dt);
             if (now > bot.respawnAt) spawnBot(bot);
             return;
         }
+        const d = difficulty;
+        if (bot.reloadUntil && now >= bot.reloadUntil) {
+            bot.reloadUntil = 0;
+            bot.mag = MAG;
+        }
 
-        botEye.set(bot.pos.x, bot.pos.y + EYE, bot.pos.z);
+        botEye.set(bot.pos.x, bot.pos.y + EYE - 1.6 * bot.crouch, bot.pos.z);
         const toX = camera.position.x - bot.pos.x;
         const toZ = camera.position.z - bot.pos.z;
         const dist = Math.hypot(toX, toZ);
+        const toYou = Math.atan2(toX, toZ);
 
-        if (now >= bot.nextThink) {
-            bot.nextThink = now + rand(110, 190);
-            const facing = Math.abs(Math.atan2(Math.sin(Math.atan2(toX, toZ) - bot.heading), Math.cos(Math.atan2(toX, toZ) - bot.heading)));
-            const aware = bot.state === 'fight' || facing < 1.4 || dist < 12;
-            bot.sees = player.alive && dist < 120 && aware && lineOfSight(botEye, camera.position);
-            if (bot.sees) {
-                if (bot.state !== 'fight') {
-                    bot.state = 'fight';
-                    bot.spottedAt = now;
-                }
-                bot.lastSeen = now;
-                bot.lastKnown.copy(camera.position);
-            } else if (bot.state === 'fight' && now - bot.lastSeen > 1800) {
-                // Lost you: go and look where you were last seen.
-                bot.state = 'roam';
-                bot.waypoint = new THREE.Vector3(bot.lastKnown.x, floorY, bot.lastKnown.z);
-            }
-        }
+        if (!frozen && now >= bot.nextThink) think(bot, now, dist, toYou);
 
-        let moveX = 0;
-        let moveZ = 0;
-        let speed = 0;
-        if (bot.state === 'fight') {
-            turnToward(bot, Math.atan2(toX, toZ), difficulty.turn, dt);
-            if (now > bot.strafeUntil) {
-                bot.strafe = [-1, 0, 1][Math.floor(Math.random() * 3)];
-                bot.strafeUntil = now + rand(500, 1300);
-            }
-            const rightX = Math.cos(bot.heading);
-            const rightZ = -Math.sin(bot.heading);
-            moveX = rightX * bot.strafe;
-            moveZ = rightZ * bot.strafe;
-            if (dist > 55) {
-                moveX += Math.sin(bot.heading);
-                moveZ += Math.cos(bot.heading);
-            }
-            speed = difficulty.speed * 0.6;
+        // What it wants to do with its legs this frame, and where it looks.
+        let wishX = 0;
+        let wishZ = 0;
+        let top = 0;
+        let crouch = false;
+        let quiet = false;
 
-            const onTarget = Math.abs(Math.atan2(Math.sin(Math.atan2(toX, toZ) - bot.heading), Math.cos(Math.atan2(toX, toZ) - bot.heading))) < 0.14;
-            if (bot.sees && player.alive && onTarget && now - bot.spottedAt > difficulty.reaction && now >= bot.nextShot) {
+        if (frozen) {
+            // The freeze at the start of a round: stands and waits.
+        } else if (bot.mode === 'fight') {
+            const onTarget = turnToward(bot, toYou, d.turn, dt) < 0.14;
+            if (now > bot.moveUntil) pickFightMove(bot, dist, now);
+            const reloading = bot.reloadUntil > now;
+            const fX = Math.sin(bot.heading);
+            const fZ = Math.cos(bot.heading);
+            wishX = fZ * bot.strafe + fX * (reloading ? -0.5 : bot.advance);
+            wishZ = -fX * bot.strafe + fZ * (reloading ? -0.5 : bot.advance);
+            crouch = bot.crouchFight && !reloading;
+            top = crouch ? CROUCH_SPEED : d.run * 0.72;
+
+            const ready = bot.sees && player.alive && !reloading && onTarget && now - bot.spottedAt > d.reaction;
+            // Counter-strafe: stop dead to shoot, then move again between
+            // bursts, the way a good player does.
+            if (bot.brake && (ready || bot.inBurst)) {
+                wishX = 0;
+                wishZ = 0;
+            }
+            const settled = !bot.brake || botSpeed(bot) < 6 || dist < 12;
+            if (ready && now >= bot.nextShot && settled) {
+                bot.inBurst = true;
                 botFire(bot, now, Math.hypot(toX, toZ, camera.position.y - botEye.y));
                 if (--bot.burstLeft <= 0) {
-                    bot.burstLeft = 3 + Math.floor(Math.random() * 3);
+                    // Crouched, it holds the spray longer.
+                    bot.burstLeft = (crouch ? 5 : 3) + Math.floor(Math.random() * 3);
                     bot.nextShot = now + rand(380, 720);
+                    bot.inBurst = false;
                 } else {
-                    bot.nextShot = now + difficulty.fireGap * rand(0.8, 1.3);
+                    bot.nextShot = now + d.fireGap * rand(0.8, 1.3);
                 }
             }
+        } else if (bot.mode === 'cover' && bot.path) {
+            // Getting to cover: running, looking where it goes.
+            if (follow(bot)) {
+                wishX = pathDir.x;
+                wishZ = pathDir.z;
+                top = d.run;
+                turnToward(bot, Math.atan2(wishX, wishZ), 6, dt);
+            }
+        } else if (bot.mode === 'cover') {
+            // Round the corner: crouched, facing the way you would come,
+            // until the reload is done and a moment more. Then back at you,
+            // quietly.
+            if (!bot.holdUntil) bot.holdUntil = Math.max(now + rand(900, 1800), bot.reloadUntil + 300);
+            turnToward(bot, Math.atan2(bot.lastKnown.x - bot.pos.x, bot.lastKnown.z - bot.pos.z), 4, dt);
+            crouch = true;
+            if (now > bot.holdUntil) {
+                bot.holdUntil = 0;
+                hunt(bot, now);
+                bot.sneak = true;
+            }
+        } else if (bot.holdUntil > now) {
+            // Holding an angle: still, maybe crouched, watching one way.
+            turnToward(bot, bot.holdYaw, 3, dt);
+            crouch = bot.crouchFight;
         } else {
-            if (!bot.waypoint || Math.hypot(bot.waypoint.x - bot.pos.x, bot.waypoint.z - bot.pos.z) < 3) bot.waypoint = newWaypoint(bot);
-            const wx = bot.waypoint.x - bot.pos.x;
-            const wz = bot.waypoint.z - bot.pos.z;
-            turnToward(bot, Math.atan2(wx, wz), 4, dt);
-            moveX = Math.sin(bot.heading);
-            moveZ = Math.cos(bot.heading);
-            speed = difficulty.speed * 0.75;
-            // Wedged against something: pick somewhere else.
-            if (now > bot.stuckCheck) {
-                if (bot.pos.distanceTo(bot.stuckFrom) < 1.5) bot.waypoint = newWaypoint(bot);
-                bot.stuckFrom.copy(bot.pos);
-                bot.stuckCheck = now + 1200;
+            if (!bot.path) {
+                if (bot.mode === 'hunt') {
+                    // Got there and you are gone: a look around, then on.
+                    bot.mode = 'patrol';
+                    bot.holdUntil = now + rand(900, 1800);
+                    bot.holdYaw = bot.heading + rand(-2, 2);
+                    bot.crouchFight = false;
+                    bot.held = true;
+                } else if (duel && !bot.held && Math.random() < 0.35 + d.smart * 0.3) {
+                    // A 1v1 is patience: take a spot and hold an angle a while.
+                    bot.holdUntil = now + rand(2500, 6000);
+                    bot.holdYaw = Math.atan2(-bot.pos.x, -bot.pos.z) + rand(-1, 1);
+                    bot.crouchFight = Math.random() < d.smart * 0.5;
+                    bot.held = true;
+                } else {
+                    patrol(bot);
+                    bot.held = false;
+                }
+            }
+            if (bot.path && follow(bot)) {
+                wishX = pathDir.x;
+                wishZ = pathDir.z;
+                const toGoal = Math.hypot(bot.goal.x - bot.pos.x, bot.goal.z - bot.pos.z);
+                const toSpot = Math.hypot(bot.lastKnown.x - bot.pos.x, bot.lastKnown.z - bot.pos.z);
+                quiet = bot.mode === 'hunt' && bot.sneak && toGoal < 34;
+                crouch = quiet && toGoal < 12 && d.smart > 0.6;
+                top = crouch ? CROUCH_SPEED : quiet ? WALK : d.run;
+                // Pre-aim where you were, or look where it is going and now
+                // and then glance aside.
+                if (bot.mode === 'hunt' && toSpot < 50) {
+                    turnToward(bot, Math.atan2(bot.lastKnown.x - bot.pos.x, bot.lastKnown.z - bot.pos.z), 5, dt);
+                } else {
+                    if (now > bot.glanceUntil + 2500 && Math.random() < dt * 0.6) {
+                        bot.glanceUntil = now + rand(400, 900);
+                        bot.glanceYaw = rand(-1.1, 1.1);
+                    }
+                    turnToward(bot, Math.atan2(wishX, wishZ) + (now < bot.glanceUntil ? bot.glanceYaw : 0), 5, dt);
+                }
+                // Running free across the map, some hop, for the fun of it.
+                if (!quiet && bot.onGround && bot.mode === 'patrol' && Math.random() < dt * 0.35 * d.smart) bot.jump = true;
             }
         }
 
-        const len = Math.hypot(moveX, moveZ);
-        if (len > 0) {
-            bot.vel.x = (moveX / len) * speed;
-            bot.vel.z = (moveZ / len) * speed;
-        } else {
-            bot.vel.x = 0;
-            bot.vel.z = 0;
+        // Wedged against something on the way: hop, and if that fails, go
+        // somewhere else.
+        if (!frozen && bot.mode !== 'fight' && top > 0 && now > bot.stuckCheck) {
+            if (bot.pos.distanceTo(bot.stuckFrom) < 1.5) {
+                bot.stuck++;
+                if (bot.stuck === 1) bot.jump = true;
+                else if (bot.stuck > 2) {
+                    if (bot.mode === 'cover') bot.path = null;
+                    else patrol(bot);
+                }
+            } else {
+                bot.stuck = 0;
+            }
+            bot.stuckFrom.copy(bot.pos);
+            bot.stuckCheck = now + 900;
         }
-        bot.pos.x += bot.vel.x * dt;
-        bot.pos.z += bot.vel.z * dt;
-        const ground = collide(bot.pos, bot.vel, BOT_RADIUS, bot.pos.y);
-        bot.pos.y += (ground - bot.pos.y) * Math.min(1, dt * 12);
-        rig.body.rotation.y = bot.heading;
 
-        // Walk cycle: legs swing opposite, knees bend on the back swing.
-        const moving = Math.hypot(bot.vel.x, bot.vel.z);
+        moveBot(bot, wishX, wishZ, top, crouch, dt);
+
+        // Walk cycle: legs swing opposite, knees bend on the back swing;
+        // crouched, the knees bend and the hips drop; in the air, the legs
+        // tuck.
+        const moving = botSpeed(bot);
         bot.phase += dt * moving * 0.55;
-        const swing = Math.min(1, moving / 8);
-        rig.legs[0].thigh.rotation.x = -Math.sin(bot.phase) * 0.6 * swing;
-        rig.legs[1].thigh.rotation.x = Math.sin(bot.phase) * 0.6 * swing;
-        rig.legs[0].knee.rotation.x = Math.max(0, Math.sin(bot.phase + 1.6)) * 0.9 * swing;
-        rig.legs[1].knee.rotation.x = Math.max(0, -Math.sin(bot.phase + 1.6)) * 0.9 * swing;
-        rig.hips.position.y = 4.4 + Math.abs(Math.cos(bot.phase)) * 0.12 * swing;
+        const swing = Math.min(1, moving / 8) * (1 - bot.air);
+        const c = bot.crouch;
+        const air = bot.air;
+        rig.body.rotation.y = bot.heading;
+        rig.legs[0].thigh.rotation.x = -Math.sin(bot.phase) * 0.6 * swing - 0.9 * c - 0.7 * air;
+        rig.legs[1].thigh.rotation.x = Math.sin(bot.phase) * 0.6 * swing - 0.9 * c - 0.4 * air;
+        rig.legs[0].knee.rotation.x = Math.max(0, Math.sin(bot.phase + 1.6)) * 0.9 * swing + 1.5 * c + 1.1 * air;
+        rig.legs[1].knee.rotation.x = Math.max(0, -Math.sin(bot.phase + 1.6)) * 0.9 * swing + 1.5 * c + 0.8 * air;
+        rig.hips.position.y = 4.4 - 1.3 * c + Math.abs(Math.cos(bot.phase)) * 0.12 * swing;
         const flinch = bot.flinchAt ? Math.exp(-(now - bot.flinchAt) / 90) : 0;
-        rig.spine.rotation.x = -flinch * 0.35 + Math.sin(now / 900 + bot.phase) * 0.02;
+        rig.spine.rotation.x = 0.25 * c - flinch * 0.35 + Math.sin(now / 900 + bot.phase) * 0.02;
 
-        if (swing > 0.3 && Math.sin(bot.phase) * Math.sin(bot.phase - dt * moving * 0.55) < 0 && now > bot.stepAt) {
+        // Footsteps only when running: walking and crouching are silent.
+        if (bot.onGround && moving > WALK + 1 && swing > 0.3 && Math.sin(bot.phase) * Math.sin(bot.phase - dt * moving * 0.55) < 0 && now > bot.stepAt) {
             bot.stepAt = now + 120;
             footstep(dist, 0.9);
         }
+    }
+
+    // Heading along the path: which way to go, into `pathDir`, and a jump if
+    // the next point is up a ledge. False once there.
+    const pathDir = { x: 0, z: 0 };
+    function follow(bot) {
+        const wp = nextWaypoint(bot);
+        if (!wp) return false;
+        const wx = wp.x - bot.pos.x;
+        const wz = wp.z - bot.pos.z;
+        const len = Math.hypot(wx, wz) || 1;
+        pathDir.x = wx / len;
+        pathDir.z = wz / len;
+        if (wp.h > bot.pos.y + STEP && len < 3.6) bot.jump = true;
+        return true;
+    }
+
+    // The next point on the path, moving on past any already reached.
+    function nextWaypoint(bot) {
+        const p = bot.path;
+        if (!p) return null;
+        while (bot.pathI < p.length) {
+            const w = p[bot.pathI];
+            const last = bot.pathI === p.length - 1;
+            const d = Math.hypot(w.x - bot.pos.x, w.z - bot.pos.z);
+            if (d < (last ? 2 : 1.6) && w.h <= bot.pos.y + STEP + 0.2) {
+                bot.pathI++;
+                continue;
+            }
+            return w;
+        }
+        bot.path = null;
+        return null;
+    }
+
+    // Feet on the ground the way yours are: quick to start and stop, little
+    // control in the air, gravity, jumps, steps up and ledges down.
+    function moveBot(bot, wishX, wishZ, top, crouch, dt) {
+        const len = Math.hypot(wishX, wishZ);
+        const tx = len > 1e-3 ? (wishX / len) * top : 0;
+        const tz = len > 1e-3 ? (wishZ / len) * top : 0;
+        const k = Math.min(1, (bot.onGround ? 10 : 1.5) * dt);
+        bot.vel.x += (tx - bot.vel.x) * k;
+        bot.vel.z += (tz - bot.vel.z) * k;
+        if (bot.jump) {
+            if (bot.onGround && bot.crouch < 0.5) {
+                bot.vel.y = JUMP;
+                bot.onGround = false;
+            }
+            bot.jump = false;
+        }
+        bot.vel.y -= GRAVITY * dt;
+        bot.pos.x += bot.vel.x * dt;
+        bot.pos.z += bot.vel.z * dt;
+        bot.pos.y += bot.vel.y * dt;
+        const ground = collide(bot.pos, bot.vel, BOT_RADIUS, bot.pos.y);
+        if (bot.pos.y + 9.6 > ceiling) {
+            bot.pos.y = ceiling - 9.6;
+            if (bot.vel.y > 0) bot.vel.y = 0;
+        }
+        if (bot.pos.y <= ground) {
+            if (!bot.onGround && bot.vel.y < -12) footstep(bot.pos.distanceTo(camera.position), 1.3);
+            bot.pos.y = ground;
+            bot.vel.y = 0;
+            bot.onGround = true;
+        } else if (bot.pos.y > ground + 0.05) {
+            bot.onGround = false;
+        }
+        bot.crouch += ((crouch ? 1 : 0) - bot.crouch) * Math.min(1, dt * 10);
+        bot.air += ((bot.onGround ? 0 : 1) - bot.air) * Math.min(1, dt * 12);
     }
 
     // csgo bodies go limp and fall with the shot: knees buckle first, then the
@@ -826,19 +1497,19 @@ export function createBots(ctx) {
             gun.rotation.x += f.gunSpin.x * dt;
             gun.rotation.y += f.gunSpin.y * dt;
             gun.rotation.z += f.gunSpin.z * dt;
-            if (gun.position.y < floorY + 0.25) {
-                gun.position.y = floorY + 0.25;
+            if (gun.position.y < f.from.y + 0.25) {
+                gun.position.y = f.from.y + 0.25;
                 gun.rotation.set(0, gun.rotation.y, Math.PI / 2);
                 f.gunLanded = true;
                 sound.burst({ cutoff: 3000, type: 'bandpass', q: 3, decay: 0.08, volume: 0.2 * near(gun.position.distanceTo(camera.position), 80) });
             }
         }
-        if (sink) gun.position.y = Math.max(floorY - 2, gun.position.y - dt * 2.2);
+        if (sink) gun.position.y = Math.max(f.from.y - 2, gun.position.y - dt * 2.2);
 
         // One pool of blood where the body comes to rest.
         if (!f.pooled && t > 0.6) {
             f.pooled = true;
-            bloodDecal(tmpB.set(rig.body.position.x + f.dir.x * 3, floorY, rig.body.position.z + f.dir.z * 3), UP, rand(1, 1.5));
+            bloodDecal(tmpB.set(rig.body.position.x + f.dir.x * 3, f.from.y, rig.body.position.z + f.dir.z * 3), UP, rand(1, 1.5));
         }
         if (t > 4.4) rig.body.visible = false;
     }
@@ -881,6 +1552,11 @@ export function createBots(ctx) {
 
         const feet = pos.y - player.eye;
         const ground = collide(pos, player.vel, RADIUS, feet);
+        // A jump under a roof or in a tunnel stops at the ceiling.
+        if (pos.y + 0.6 > ceiling) {
+            pos.y = ceiling - 0.6;
+            if (player.vel.y > 0) player.vel.y = 0;
+        }
         // Bots are solid too.
         for (const bot of bots) {
             if (!bot.alive) continue;
@@ -908,12 +1584,14 @@ export function createBots(ctx) {
         if (player.onGround && speed > WALK + 2 && now > player.stepAt) {
             player.stepAt = now + 330;
             footstep(0, 0.7);
+            // And the bots hear them.
+            noise(pos, 55);
         }
     }
 
-    function respawnPlayer() {
-        const spot = spawnPoint(bots.filter((b) => b.alive).map((b) => b.pos));
-        camera.position.set(spot.x, floorY + EYE, spot.z);
+    function respawnPlayer(at) {
+        const spot = at || spawnPoint(bots.filter((b) => b.alive).map((b) => b.pos));
+        camera.position.set(spot.x, spot.y + EYE, spot.z);
         player.eye = EYE;
         camera.rotation.z = 0;
         player.vel.set(0, 0, 0);
@@ -925,22 +1603,139 @@ export function createBots(ctx) {
         ctx.onRespawn?.();
     }
 
+    /* ---------- 1v1: rounds ---------- */
+
+    // One life each a round. A three second freeze to get your bearings,
+    // then the round: whoever is left standing takes it, or on time, whoever
+    // has more health. The two of you swap ends every round. First to the
+    // set number of rounds wins the match.
+    const STILL = { forward: false, back: false, left: false, right: false, jump: false, walk: false, crouch: false };
+
+    function duelSpot(side) {
+        ensureNav();
+        const list = spawns?.[side];
+        if (list?.length) {
+            for (let i = 0; i < 6; i++) {
+                const [x, z] = list[Math.floor(Math.random() * list.length)];
+                const k = openNear(x, z);
+                if (k >= 0 && nav.comp[k] === nav.main) {
+                    const p = cellPoint(k);
+                    return new THREE.Vector3(p.x, p.h, p.z);
+                }
+            }
+        }
+        // No spawns on this map: you anywhere, the bot as far off as it gets.
+        return side === 0 ? spawnPoint([]) : spawnPoint([camera.position]);
+    }
+
+    function startDuelRound() {
+        duel.round++;
+        duel.phase = 'freeze';
+        duel.until = duel.clock + DUEL_FREEZE_MS;
+        duel.roundEnd = duel.until + DUEL_ROUND_MS;
+        duel.shown = DUEL_ROUND_MS;
+        duel.counted = -1;
+        clearEffects();
+
+        const side = (duel.round + duel.flip) % 2;
+        const you = duelSpot(side);
+        respawnPlayer(you);
+        const bot = bots[0];
+        spawnBot(bot, duelSpot(1 - side));
+        // Both face the middle of the map, or each other if already there.
+        const face = Math.hypot(you.x, you.z) > 12 ? { x: 0, z: 0 } : bot.pos;
+        bot.heading = Math.atan2(-bot.pos.x, -bot.pos.z);
+        ctx.onRoundStart?.({ yaw: Math.atan2(-(face.x - you.x), -(face.z - you.z)) });
+    }
+
+    function duelTick(dt) {
+        const bot = bots[0];
+        duel.clock += dt * 1000;
+        if (duel.phase === 'freeze') {
+            const left = Math.ceil((duel.until - duel.clock) / 1000);
+            if (left !== duel.counted) {
+                duel.counted = left;
+                const last = Math.max(...duel.wins) === duel.first - 1;
+                banner(last ? 'match point' : `round ${duel.round}`, `${scoreLine()} · ${left}`);
+                sound.tone({ from: 880, to: 880, decay: 0.08, volume: 0.1, type: 'triangle' });
+            }
+            if (duel.clock >= duel.until) {
+                duel.phase = 'live';
+                duel.bannerUntil = duel.clock + 700;
+                banner('go', scoreLine());
+                sound.tone({ from: 1320, to: 1320, decay: 0.16, volume: 0.13, type: 'triangle' });
+            }
+        } else if (duel.phase === 'live') {
+            if (duel.bannerUntil && duel.clock > duel.bannerUntil) {
+                duel.bannerUntil = 0;
+                banner('');
+            }
+            duel.shown = Math.max(0, duel.roundEnd - duel.clock);
+            if (!player.alive) roundOver(1, 'dead');
+            else if (!bot.alive) roundOver(0, 'kill');
+            else if (duel.clock >= duel.roundEnd) {
+                roundOver(player.health > bot.health ? 0 : bot.health > player.health ? 1 : -1, 'time');
+            }
+        } else if (duel.phase === 'over' && duel.clock >= duel.until) {
+            if (Math.max(...duel.wins) >= duel.first) {
+                duel.phase = 'done';
+                banner('');
+                ctx.onDuelEnd?.({ won: duel.wins[0] >= duel.first, you: duel.wins[0], them: duel.wins[1], name: bot.name, rounds: duel.round });
+            } else {
+                startDuelRound();
+            }
+        }
+    }
+
+    const scoreLine = () => `you ${duel.wins[0]} : ${duel.wins[1]} ${bots[0].name.toLowerCase()}`;
+
+    function roundOver(winner, how) {
+        const bot = bots[0];
+        duel.phase = 'over';
+        duel.until = duel.clock + DUEL_AFTER_MS;
+        duel.bannerUntil = 0;
+        if (winner >= 0) duel.wins[winner]++;
+        const match = Math.max(...duel.wins) >= duel.first;
+        let title;
+        if (winner === 0) title = match ? 'match won' : 'round won';
+        else if (winner === 1) title = match ? 'match lost' : `${bot.name.toLowerCase()} takes the round`;
+        else title = 'draw';
+        const why = how === 'time' ? (winner < 0 ? 'time · even on health' : 'time · more health left') : '';
+        banner(title, [scoreLine(), why].filter(Boolean).join(' · '), winner === 0 ? 'win' : winner === 1 ? 'loss' : '');
+        if (winner === 0) [660, 880, 1100].forEach((f, i) => sound.tone({ at: i * 0.09, from: f, to: f, decay: 0.2, volume: 0.13, type: 'triangle' }));
+        else if (winner === 1) [520, 390].forEach((f, i) => sound.tone({ at: i * 0.14, from: f, to: f * 0.9, decay: 0.25, volume: 0.13, type: 'triangle' }));
+        ctx.onDuelRound?.();
+    }
+
+    function banner(title, sub = '', tone = '') {
+        if (!el.round) return;
+        el.round.hidden = !title;
+        el.roundTitle.textContent = title;
+        el.roundSub.textContent = sub;
+        el.round.dataset.tone = tone;
+    }
+
     /* ---------- per frame ---------- */
 
     function update(now, dt, input) {
         if (!active) return;
 
+        if (duel) duelTick(dt);
+        // The freeze at the start of a 1v1 round: look around, but no one moves.
+        const frozen = !!duel && duel.phase === 'freeze';
+
         if (player.alive) {
-            movePlayer(now, dt, input);
+            movePlayer(now, dt, frozen ? { ...input, keys: STILL } : input);
         } else {
-            // Dead: the view drops to the floor and tips over, then respawns.
+            // Dead: the view drops to the floor and tips over, then respawns
+            // (in a 1v1, not until the next round).
             const t = (now - player.deadAt) / 1000;
-            camera.position.y += (floorY + 2 - camera.position.y) * Math.min(1, dt * 6);
+            camera.position.y += ((player.deadFeet ?? floorY) + 2 - camera.position.y) * Math.min(1, dt * 6);
             camera.rotation.z = -0.5 * easeOut(t / 0.6);
-            if (now - player.deadAt > RESPAWN_MS) respawnPlayer();
+            if (!duel && now - player.deadAt > RESPAWN_MS) respawnPlayer();
         }
 
-        for (const bot of bots) updateBot(bot, now, dt);
+        for (const bot of bots) updateBot(bot, now, dt, frozen);
 
         // Bots keep out of each other.
         for (let i = 0; i < bots.length; i++) {
@@ -1222,6 +2017,7 @@ export function createBots(ctx) {
 
     function playHighlights(list, hooks = {}) {
         replay = { list, hooks, i: -1 };
+        banner('');
         el.killfeed.replaceChildren();
         el.death.hidden = true;
         el.healthBox.hidden = true;
@@ -1431,14 +2227,26 @@ export function createBots(ctx) {
         clearEffects();
         removeBots();
         resetReel();
+        banner('');
         stats.kills = 0;
         stats.deaths = 0;
         stats.headshots = 0;
         active = true;
+        ensureNav();
 
         const names = [...NAMES].sort(() => Math.random() - 0.5);
+        if (opts.duel) {
+            // flip: which end you start at, so it is not always the same one.
+            duel = { first: opts.duel.first, wins: [0, 0], round: 0, phase: 'freeze', clock: 0, until: 0, roundEnd: 0, shown: DUEL_ROUND_MS, flip: Math.random() < 0.5 ? 0 : 1 };
+            bots.push(makeBot(names[0]));
+            player.eye = EYE;
+            el.healthBox.hidden = false;
+            startDuelRound();
+            return;
+        }
+        duel = null;
         const spot = spawnPoint([]);
-        camera.position.set(spot.x, floorY + EYE, spot.z);
+        camera.position.set(spot.x, spot.y + EYE, spot.z);
         player.eye = EYE;
         for (let i = 0; i < botCount; i++) {
             const bot = makeBot(names[i % names.length]);
@@ -1460,7 +2268,7 @@ export function createBots(ctx) {
         const out = [];
         for (const bot of bots) {
             if (!bot.alive) continue;
-            const head = new THREE.Vector3(bot.pos.x, bot.pos.y + 8.35, bot.pos.z);
+            const head = new THREE.Vector3(bot.pos.x, bot.pos.y + 8.35 - 1.6 * bot.crouch, bot.pos.z);
             const dist = head.distanceTo(camera.position);
             if (dist < 120 && lineOfSight(camera.position, head)) out.push({ head, dist, name: bot.name });
         }
@@ -1477,6 +2285,8 @@ export function createBots(ctx) {
 
     function stop() {
         active = false;
+        duel = null;
+        banner('');
         resetReel();
         removeBots();
         clearEffects();
@@ -1501,6 +2311,15 @@ export function createBots(ctx) {
         },
         setBounds(b) {
             bounds = b;
+            navDirty = true;
+        },
+        setSpawns(list) {
+            spawns = list || null;
+        },
+        // The 1v1 scoreboard, for the HUD: rounds each, and the clock.
+        get duel() {
+            if (!duel) return null;
+            return { you: duel.wins[0], them: duel.wins[1], name: bots[0]?.name ?? '', round: duel.round, first: duel.first, timeLeft: duel.shown, phase: duel.phase };
         },
         get active() {
             return active;

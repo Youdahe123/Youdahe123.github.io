@@ -39,6 +39,12 @@
         <div class="aim-damage" id="aimDamage" aria-hidden="true"></div>
         <p class="aim-death" id="aimDeath" hidden></p>
 
+        <!-- 1v1: the round number and countdown, then who took the round. -->
+        <div class="aim-round" id="aimRound" hidden aria-live="polite">
+            <b id="aimRoundTitle"></b>
+            <span id="aimRoundSub"></span>
+        </div>
+
         <!-- Behind the menu, a ghost player shows off the picked mode. -->
         <p class="aim-demo-tag" id="aimDemoTag" hidden><span class="kc-dot" aria-hidden="true"></span>demo &middot; press start to play</p>
 
@@ -86,12 +92,13 @@
                         <div class="aim-chips" id="aimModes" role="radiogroup" aria-labelledby="aimModeLabel"></div>
                         <p class="aim-mode-note" id="aimModeNote" aria-live="polite"></p>
                     </div>
-                    <!-- Bots mode only: how good the bots are and how many. -->
+                    <!-- Bots and 1v1 only: how good the bots are, and how many (or, in a 1v1, how many rounds). -->
                     <div class="aim-pick" id="aimBotRow" hidden>
                         <span class="aim-pick-label" id="aimDifficultyLabel">bots</span>
                         <div class="aim-bot-options">
                             <div class="aim-chips" id="aimDifficulty" role="radiogroup" aria-labelledby="aimDifficultyLabel"></div>
                             <div class="aim-chips" id="aimBotCount" role="radiogroup" aria-label="number of bots"></div>
+                            <div class="aim-chips" id="aimRounds" role="radiogroup" aria-label="rounds to win" hidden></div>
                         </div>
                     </div>
                     <!-- Phones: no open middle in the menu, so the gun or your character turns in this box. -->
