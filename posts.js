@@ -62,6 +62,12 @@ function renderPostContent(content) {
         if (imgMatch) {
             return `<img src="${imgMatch[1]}" alt="Post image" class="post-image">`;
         }
+        // `{{youtube:ID}}` or `{{youtube:ID?start=SECONDS}}` becomes a playable embed
+        const ytMatch = line.trim().match(/^\{\{youtube:([\w-]{11})(?:\?start=(\d+))?\}\}$/);
+        if (ytMatch) {
+            const start = ytMatch[2] ? `?start=${ytMatch[2]}` : '';
+            return `<div class="post-video"><iframe src="https://www.youtube-nocookie.com/embed/${ytMatch[1]}${start}" title="YouTube video" loading="lazy" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>`;
+        }
         // `## text` on its own line becomes a section heading
         const headingMatch = line.trim().match(/^##\s+(.+)$/);
         if (headingMatch) {
